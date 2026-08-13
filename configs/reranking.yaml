@@ -1,0 +1,22 @@
+# clip_weight: 0.8
+
+# object_weight: 0.05
+
+# metadata_weight: 0.05
+
+# ocr_weight: 0.05 #nếu tập trung chữ -> +0.3
+
+# asr_weight: 0.05 #nếu tập trung âm thanh -> +0.3
+
+rrf_k: 60
+weights:
+
+  retrieval: 0.6
+
+  ocr: 0.1
+
+  asr: 0.05
+
+  metadata: 0.1
+
+  object: 0.15

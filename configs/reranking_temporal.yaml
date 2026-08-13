@@ -1,0 +1,24 @@
+# sequence_reranking:
+
+#   weights:
+
+#     retrieval_score: 0.55
+
+#     temporal_gap: 0.15
+
+#     temporal_consistency: 0.15
+
+#     rank_bonus: 0.10
+
+#     coverage: 0.05
+
+#   normalize_score: true
+weights:
+
+  semantic_score: 0.50
+
+  beam_margin: 0.15
+
+  temporal_gap: 0.15
+
+  temporal_consistency: 0.20

@@ -1,0 +1,8 @@
+top_k: 1000
+retrieval_threshold: 0.0
+
+# Định nghĩa trọng số gộp kết quả đa mô hình (Multi-model Fusion Weights)
+model_weights:
+  siglip2: 1.2
+  dfn5b_vit_h14: 1
+        

@@ -1,0 +1,32 @@
+{
+    "vector_index": 15230,
+
+    "video_id": "L21_V001",
+
+    "keyframe_index": 35,
+
+    "frame_idx": 1078,
+
+    "pts_time": 35.93,
+
+    "fps": 30,
+
+    "keyframe_path": "keyframes/L21/L21_V001/000035.jpg",
+    "object_path": "data/objects/L21_V001/000035.json",
+    "metadata_path": "data/metadata/L21_V001.json",
+    "objects": [
+        "tower",
+        "building",
+        "boat",
+        "vehicle"
+    ],
+
+    "metadata": {
+        "title": "...",
+        "description": "...",
+        "keywords": [
+            ...
+        ],
+        "publish_date": "01/08/2024"
+    }
+}
