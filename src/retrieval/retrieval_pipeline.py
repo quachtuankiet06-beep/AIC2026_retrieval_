@@ -1,5 +1,6 @@
 
 import yaml
+import re
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -40,6 +41,53 @@ def get_faiss_index(index_path):
         _FAISS_CACHE[index_path] = faiss.read_index(index_path)
 
     return _FAISS_CACHE[index_path]
+
+def decompose_standard_narrative_query(query_text):
+    """
+    Phân rã câu truy vấn văn xuôi / có cấu trúc chuỗi thời gian trong Standard Query thành:
+    - q_full: Câu truy vấn đầy đủ
+    - q_main: Mệnh đề / hành động trực quan chính (Anchor)
+    - q_context: Mệnh đề diễn biến bổ trợ (Context Clue) nếu có
+    """
+    if not query_text or not isinstance(query_text, str):
+        return [query_text]
+
+    # Các từ nối chỉ mốc thời gian / diễn biến thường gặp trong đề KIS
+    temporal_splitters = [
+        r"(?i)\bbiết sau đó\b",
+        r"(?i)\bvà sau đó\b",
+        r"(?i)\bsau đó\b",
+        r"(?i)\btiếp theo\b",
+        r"(?i)\bkế tiếp\b",
+        r"(?i)\bđoạn sau\b",
+        r"(?i)\brồi sau đó\b"
+    ]
+    
+    # 1. Thử tách theo từ nối thời gian
+    for pattern in temporal_splitters:
+        parts = re.split(pattern, query_text)
+        if len(parts) > 1 and len(parts[0].strip()) > 10:
+            q_main = parts[0].strip().rstrip(".,; ")
+            q_context = " ".join([p.strip() for p in parts[1:] if p.strip()])
+            print(f"[INFO] Narrative Query Decomposition (Standard Search):")
+            print(f"  -> Q_Full   : '{query_text}'")
+            print(f"  -> Q_Anchor : '{q_main}'")
+            print(f"  -> Q_Context: '{q_context}'")
+            return [query_text, q_main, q_context]
+            
+    # 2. Thử tách theo dấu câu nếu câu dài chứa nhiều mệnh đề
+    sentences = [s.strip() for s in re.split(r"[.\n]+", query_text) if len(s.strip()) > 10]
+    if len(sentences) >= 2 and len(query_text.split()) > 15:
+        q_main = sentences[0]
+        q_context = " ".join(sentences[1:])
+        print(f"[INFO] Narrative Query Decomposition (Standard Search):")
+        print(f"  -> Q_Full   : '{query_text}'")
+        print(f"  -> Q_Anchor : '{q_main}'")
+        print(f"  -> Q_Context: '{q_context}'")
+        return [query_text, q_main, q_context]
+        
+    return [query_text]
+
 def expand_and_translate_query(query_text):
     """
     Tự động dịch query tiếng Việt sang tiếng Anh và chuẩn hóa để tối ưu cho mô hình.
@@ -73,33 +121,46 @@ def get_siglip2_model(device="cuda"):
     return _SIGLIP2_CACHE["processor"], _SIGLIP2_CACHE["model"]
 
 def siglip2_retrieval_pipeline(query_text, index_path, config_path):
-    query_text = expand_and_translate_query(query_text)
-    cfg = load_config(config_path)
+    sub_queries = decompose_standard_narrative_query(query_text)
+    translated_sub_queries = [expand_and_translate_query(q) for q in sub_queries if q.strip()]
 
+    cfg = load_config(config_path)
     top_k = cfg.get("top_k", 100)
     threshold = cfg.get("retrieval_threshold", 0.0)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     processor, model = get_siglip2_model(device)
-    
     max_length = model.config.text_config.max_position_embeddings
-    inputs = processor(
-        text=[query_text], return_tensors="pt", padding="max_length", truncation=True, max_length=max_length
-    )
-    inputs = {k: v.to(device) for k, v in inputs.items() if torch.is_tensor(v)}
 
+    # Tokenize và trích xuất embedding cho từng sub-query
+    embeddings_list = []
     with torch.no_grad():
-        text_outputs = model.get_text_features(**inputs)
-        if hasattr(text_outputs, "pooler_output"):
-            text_features = text_outputs.pooler_output
-        elif hasattr(text_outputs, "last_hidden_state"):
-            text_features = text_outputs.last_hidden_state.mean(dim=1)
-        else:
-            text_features = text_outputs
+        for t_query in translated_sub_queries:
+            inputs = processor(
+                text=[t_query], return_tensors="pt", padding="max_length", truncation=True, max_length=max_length
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items() if torch.is_tensor(v)}
+            text_outputs = model.get_text_features(**inputs)
+            if hasattr(text_outputs, "pooler_output"):
+                tf = text_outputs.pooler_output
+            elif hasattr(text_outputs, "last_hidden_state"):
+                tf = text_outputs.last_hidden_state.mean(dim=1)
+            else:
+                tf = text_outputs
+            tf = F.normalize(tf, p=2, dim=1)
+            embeddings_list.append(tf)
 
-        text_features = F.normalize(text_features, p=2, dim=1)
+    # Gộp trọng số nếu có Sub-query: 50% Anchor chính, 35% Full query, 15% Context phụ
+    if len(embeddings_list) == 3:
+        combined_tf = 0.35 * embeddings_list[0] + 0.50 * embeddings_list[1] + 0.15 * embeddings_list[2]
+        combined_tf = F.normalize(combined_tf, p=2, dim=1)
+    elif len(embeddings_list) == 2:
+        combined_tf = 0.40 * embeddings_list[0] + 0.60 * embeddings_list[1]
+        combined_tf = F.normalize(combined_tf, p=2, dim=1)
+    else:
+        combined_tf = embeddings_list[0]
 
-    query_embedding = text_features.cpu().numpy().astype(np.float32)
+    query_embedding = combined_tf.cpu().numpy().astype(np.float32)
 
     print("[INFO] Loading SigLIP 2 FAISS index...")
     index = get_faiss_index(index_path)
@@ -192,24 +253,34 @@ def get_dfn5b_vit_h14_model(device="cuda"):
     return _DFN5B_CACHE["model"], _DFN5B_CACHE["tokenizer"]
 
 def dfn5b_vit_h14_retrieval_pipeline(query_text, index_path, config_path):
-    query_text = expand_and_translate_query(query_text)
-    cfg = load_config(config_path)
+    sub_queries = decompose_standard_narrative_query(query_text)
+    translated_sub_queries = [expand_and_translate_query(q) for q in sub_queries if q.strip()]
 
+    cfg = load_config(config_path)
     top_k = cfg.get("top_k", 100)
     threshold = cfg.get("retrieval_threshold", 0.0)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model, tokenizer = get_dfn5b_vit_h14_model(device)
-    
-    # Tokenize câu truy vấn theo chuẩn open_clip
-    text_tokens = tokenizer([query_text]).to(device)
 
+    embeddings_list = []
     with torch.no_grad(), torch.amp.autocast(device):
-        text_features = model.encode_text(text_tokens)
-        # BẮT BUỘC chuẩn hóa L2 tuyệt đối để tương thích IndexFlatIP (Cosine Similarity)
-        text_features = F.normalize(text_features, p=2, dim=-1)
+        for t_query in translated_sub_queries:
+            text_tokens = tokenizer([t_query]).to(device)
+            tf = model.encode_text(text_tokens)
+            tf = F.normalize(tf, p=2, dim=-1)
+            embeddings_list.append(tf)
 
-    query_embedding = text_features.cpu().float().numpy().astype(np.float32)
+    if len(embeddings_list) == 3:
+        combined_tf = 0.35 * embeddings_list[0] + 0.50 * embeddings_list[1] + 0.15 * embeddings_list[2]
+        combined_tf = F.normalize(combined_tf, p=2, dim=-1)
+    elif len(embeddings_list) == 2:
+        combined_tf = 0.40 * embeddings_list[0] + 0.60 * embeddings_list[1]
+        combined_tf = F.normalize(combined_tf, p=2, dim=-1)
+    else:
+        combined_tf = embeddings_list[0]
+
+    query_embedding = combined_tf.cpu().float().numpy().astype(np.float32)
 
     print("[INFO] Loading DFN5B-CLIP-ViT-H-14 FAISS index...")
     index = faiss.read_index(index_path)
