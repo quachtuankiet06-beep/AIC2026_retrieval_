@@ -25,7 +25,9 @@ MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_mapping.json"
 RETRIEVAL_CONFIG = BASE_DIR / "configs" / "retrieval.yaml"
 RERANK_CONFIG = BASE_DIR / "configs" / "reranking.yaml"
 VIDEO_FPS_MAPPING_PATH = BASE_DIR / "data" / "mapping" / "video_fps_mapping.json"
-VIDEO_DIR = r"C:\Users\Public\Documents"
+# Đọc từ biến môi trường - mặc định là Windows path khi chạy local
+# Trong Docker container, set VIDEO_DIR=/videos qua docker-compose.yml hoặc -e flag
+VIDEO_DIR = os.environ.get("VIDEO_DIR", r"C:\Users\Public\Documents")
 
 # Cache FPS mapping
 _video_fps_cache: Dict[str, float] = {}

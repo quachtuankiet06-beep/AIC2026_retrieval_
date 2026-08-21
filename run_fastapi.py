@@ -10,16 +10,20 @@ sys.path.insert(0, str(ROOT))
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     host = os.environ.get("HOST", "0.0.0.0")
+    env = os.environ.get("ENV", "production")
+    # Chỉ bật hot-reload khi chạy development, tắt trong Docker production
+    reload = env == "development"
 
     print("\n" + "=" * 60)
     print("🚀 ĐANG KHỞI CHẠY HỆ THỐNG FASTAPI VIDEO SEARCH - AIC 2026")
     print(f"🔗 Mở trình duyệt và truy cập: http://127.0.0.1:{port}")
     print(f"📖 Swagger API Docs: http://127.0.0.1:{port}/docs")
+    print(f"⚙️  Môi trường: {env.upper()} | Hot-reload: {reload}")
     print("=" * 60 + "\n")
 
     uvicorn.run(
         "fastapi_app.main:app",
         host=host,
         port=port,
-        reload=True
+        reload=reload
     )

@@ -52,13 +52,13 @@ dist/
 *.egg-info/
 *.whl
 # ==========================================================
-# Large data / generated indexes
+# Large data / generated indexes (quá lớn cho GitHub)
 # ==========================================================
-data/*
+data/**
+!data/**/.gitkeep
 
-# Keep data documentation
-!data/README.md
+# Video files
+videos_placeholder/
 
-# Ignore all generated mapping/index files
-data/mapping/
-data/indexes/
+# Environment file (chứa secrets, không commit)
+.env
