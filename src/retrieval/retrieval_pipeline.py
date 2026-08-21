@@ -19,6 +19,10 @@ _DFN5B_CACHE = {
     "tokenizer": None
 }
 
+# 1. Tự động nhận diện nếu có GPU, nếu không thì dùng CPU
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"[INFO] Using device: {device}")
+
 # NEW
 _FAISS_CACHE = {}
 def get_faiss_index(index_path):
@@ -117,57 +121,57 @@ def siglip2_retrieval_pipeline(query_text, index_path, config_path):
 # 2. CLIP ViT-B/32 PIPELINE (MỚI BỔ SUNG)
 # ==========================================================
 
-_CLIP_CACHE = {"model": None}
+# _CLIP_CACHE = {"model": None}
 
-def get_clip_b32_model(device="cuda"):
-    if _CLIP_CACHE["model"] is None:
-        print("[INFO] Loading OpenAI CLIP ViT-B/32...")
-        model, _ = clip.load("ViT-B/32", device=device)
-        model.eval()
-        _CLIP_CACHE["model"] = model
-    return _CLIP_CACHE["model"]
+# def get_clip_b32_model(device="cuda"):
+#     if _CLIP_CACHE["model"] is None:
+#         print("[INFO] Loading OpenAI CLIP ViT-B/32...")
+#         model, _ = clip.load("ViT-B/32", device=device)
+#         model.eval()
+#         _CLIP_CACHE["model"] = model
+#     return _CLIP_CACHE["model"]
 
-def clip_b32_retrieval_pipeline(query_text, index_path, config_path):
-    query_text = expand_and_translate_query(query_text)
-    cfg = load_config(config_path)
+# def clip_b32_retrieval_pipeline(query_text, index_path, config_path):
+#     query_text = expand_and_translate_query(query_text)
+#     cfg = load_config(config_path)
 
-    top_k = cfg.get("top_k", 100)
-    threshold = cfg.get("retrieval_threshold", 0.0)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+#     top_k = cfg.get("top_k", 100)
+#     threshold = cfg.get("retrieval_threshold", 0.0)
+#     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    model = get_clip_b32_model(device)
+#     model = get_clip_b32_model(device)
     
-    # Tokenize query theo chuẩn CLIP
-    try:
-        text_tokens = clip.tokenize([query_text], truncate=True).to(device)
-    except TypeError:
-        # Phòng hờ version clip cũ không hỗ trợ tham số truncate
-        words = query_text.split()
-        if len(words) > 55:
-            query_text = " ".join(words[:55])
-        text_tokens = clip.tokenize([query_text]).to(device)
+#     # Tokenize query theo chuẩn CLIP
+#     try:
+#         text_tokens = clip.tokenize([query_text], truncate=True).to(device)
+#     except TypeError:
+#         # Phòng hờ version clip cũ không hỗ trợ tham số truncate
+#         words = query_text.split()
+#         if len(words) > 55:
+#             query_text = " ".join(words[:55])
+#         text_tokens = clip.tokenize([query_text]).to(device)
 
-    with torch.no_grad():
-        text_features = model.encode_text(text_tokens)
-        # BẮT BUỘC chuẩn hóa L2 tuyệt đối cho CLIP ViT-B/32
-        text_features = F.normalize(text_features, p=2, dim=-1)
+#     with torch.no_grad():
+#         text_features = model.encode_text(text_tokens)
+#         # BẮT BUỘC chuẩn hóa L2 tuyệt đối cho CLIP ViT-B/32
+#         text_features = F.normalize(text_features, p=2, dim=-1)
 
-    query_embedding = text_features.cpu().numpy().astype(np.float32)
+#     query_embedding = text_features.cpu().numpy().astype(np.float32)
 
-    print("[INFO] Loading CLIP ViT-B/32 FAISS index...")
-    index = get_faiss_index(index_path)
-    scores, indices = index.search(query_embedding, top_k)
+#     print("[INFO] Loading CLIP ViT-B/32 FAISS index...")
+#     index = get_faiss_index(index_path)
+#     scores, indices = index.search(query_embedding, top_k)
 
-    results = []
-    rank = 1
-    for score, idx in zip(scores[0], indices[0]):
-        if idx == -1 or score < threshold:
-            continue
-        results.append({"rank": rank, "vector_index": int(idx), "score": float(score)})
-        rank += 1
+#     results = []
+#     rank = 1
+#     for score, idx in zip(scores[0], indices[0]):
+#         if idx == -1 or score < threshold:
+#             continue
+#         results.append({"rank": rank, "vector_index": int(idx), "score": float(score)})
+#         rank += 1
 
-    print(f"[INFO] CLIP ViT-B/32 Retrieval returned {len(results)} candidates.")
-    return results
+#     print(f"[INFO] CLIP ViT-B/32 Retrieval returned {len(results)} candidates.")
+#     return results
 # ==========================================================
 # 3. DFN5B-CLIP-ViT-H-14 PIPELINE (MỚI BỔ SUNG)
 # ==========================================================

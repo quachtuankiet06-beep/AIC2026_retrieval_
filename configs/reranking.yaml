@@ -13,10 +13,11 @@ weights:
 
   retrieval: 0.6
 
-  ocr: 0.1
+  ocr: 0.05
 
-  asr: 0.05
+  asr: 0.1
 
   metadata: 0.1
 
   object: 0.15
+ocr_threshold: 0.85

@@ -4,7 +4,9 @@
 # from PIL import Image
 # import sys
 # import json
-# from src.reranking.temporal_reranking_pipeline import temporal_sequence_reranking_optimized # (Đường dẫn tùy thuộc vào vị trí file chứa hàm của bạn)
+# import os
+# from src.reranking.temporal_reranking_pipeline import temporal_sequence_reranking_optimized
+
 # # Thêm đường dẫn gốc của project vào sys.path để import các module bên trong src
 # ROOT = Path(__file__).resolve().parent
 # sys.path.append(str(ROOT))
@@ -13,7 +15,7 @@
 # from src.reranking.reranking_pipeline import reranking_pipeline
 # from src.retrieval.retrieval_pipeline import (
 #     siglip2_retrieval_pipeline,
-#     clip_b32_retrieval_pipeline
+#     dfn5b_vit_h14_retrieval_pipeline
 # )
 # from src.retrieval.retrieval_multi_model import retrieval_multi_model_pipeline
 # from src.retrieval.temporal_retrieval_multi_model import temporal_retrieval_multi_model_pipeline
@@ -32,6 +34,18 @@
 # RERANK_CONFIG = BASE_DIR / "configs" / "reranking.yaml"
 # VIDEO_FPS_MAPPING_PATH = BASE_DIR / "data" / "mapping" / "video_fps_mapping.json"
 
+# # Thư mục chứa video gốc theo đúng yêu cầu của bạn
+# VIDEO_DIR = r"C:\Users\Public\Documents"
+
+# def get_video_path(video_id):
+#     """Tìm file video trong thư mục Public/Documents hỗ trợ nhiều định dạng"""
+#     extensions = [".mp4", ".avi", ".mkv", ".mov", ".MP4"]
+#     for ext in extensions:
+#         video_path = os.path.join(VIDEO_DIR, f"{video_id}{ext}")
+#         if os.path.exists(video_path):
+#             return video_path
+#     return None
+
 # @st.cache_resource
 # def load_pipeline_configs():
 #     print("[INFO] Loading system paths and configs...")
@@ -44,7 +58,6 @@
 #         try:
 #             with open(VIDEO_FPS_MAPPING_PATH, "r", encoding="utf-8") as f:
 #                 data = json.load(f)
-#                 # Tạo dictionary tra cứu nhanh: {video_id: fps}
 #                 return {item["video_id"]: float(item.get("fps", 25.0)) for item in data}
 #         except Exception as e:
 #             print(f"[WARNING] Không thể load video_fps_mapping.json: {e}")
@@ -70,7 +83,7 @@
 
 # def get_submission_frame_info(video_id, pts_time):
 #     """Tính toán frame_idx từ pts_time và fps của video từ video_fps_mapping.json"""
-#     fps = video_fps_dict.get(video_id, 25.0) # Mặc định 25.0 nếu không tìm thấy
+#     fps = video_fps_dict.get(video_id, 25.0)
 #     frame_idx = int(round(float(pts_time) * fps))
 #     return frame_idx
 
@@ -88,7 +101,7 @@
 # # 2. Chọn chế độ chạy Retrieval
 # retrieval_mode = st.sidebar.radio(
 #     "Chế độ Retrieval:",
-#     ["Multi-Model Ensemble (SigLIP2 + ViT-B/32)", "Single Model (Đơn mô hình)"]
+#     ["Multi-Model Ensemble (SigLIP2 + DFN5B ViT-H/14)", "Single Model (Đơn mô hình)"]
 # )
 
 # # Khai báo biến cấu hình model
@@ -98,27 +111,27 @@
 # if retrieval_mode == "Single Model (Đơn mô hình)":
 #     single_model_choice = st.sidebar.selectbox(
 #         "Chọn Model đơn lẻ:",
-#         ["siglip2", "clip_b32"]
+#         ["siglip2", "dfn5b_vit_h14"]
 #     )
 # else:
 #     st.sidebar.markdown("**Chọn các Model tham gia Ensemble:**")
 #     use_siglip2 = st.sidebar.checkbox("SigLIP 2", value=True)
-#     use_clip = st.sidebar.checkbox("CLIP ViT-B/32", value=True)
+#     use_dfn5b = st.sidebar.checkbox("DFN5B ViT-H/14", value=True)
 
 #     if use_siglip2:
 #         selected_models.append({
 #             "name": "siglip2", 
-#             "index_path": str(BASE_DIR / "data" / "indexes" / "siglib2.index")
+#             "index_path": str(BASE_DIR / "data" / "indexes" / "siglip2.index")
 #         })
-#     if use_clip:
+#     if use_dfn5b:
 #         selected_models.append({
-#             "name": "clip_b32", 
-#             "index_path": str(BASE_DIR / "data" / "indexes" / "vit_b32.index")
+#             "name": "dfn5b_vit_h14", 
+#             "index_path": str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14.index")
 #         })
 
 # top_k_display = st.sidebar.slider("Số lượng kết quả hiển thị (Top K)", min_value=10, max_value=100, value=20, step=10)
 
-# # Cấu hình phụ nếu bật Temporal Mode (Chuyển sang Keyframe Gap & Beam Width)
+# # Cấu hình phụ nếu bật Temporal Mode
 # max_kf_gap = 150
 # min_kf_gap = 0
 # beam_width = 5
@@ -128,13 +141,13 @@
 #     max_kf_gap = st.sidebar.slider("Khoảng cách keyframe tối đa giữa các bước", min_value=1, max_value=500, value=150, step=10)
 #     min_kf_gap = st.sidebar.slider("Khoảng cách keyframe tối thiểu giữa các bước", min_value=0, max_value=50, value=0, step=1)
 #     beam_width = st.sidebar.slider("Beam Width (Độ rộng nhánh chùm mỗi video)", min_value=1, max_value=100, value=5, step=1)
+
 # # ==========================================
-# # CÔNG CỤ CHUYỂN ĐỔI NHANH VIDEO / THỜI GIAN -> FRAME_IDX (DÙNG ĐỂ NỘP BÀI)
+# # CÔNG CỤ CHUYỂN ĐỔI NHANH VIDEO / THỜI GIAN -> FRAME_IDX
 # # ==========================================
 # st.sidebar.markdown("---")
 # st.sidebar.markdown("🛠️ **Converter: Video/Time -> Frame Index**")
 
-# # Ô input nhận vào dạng "L22_V001 / 2:16" hoặc "L22_V001 / 60.2"
 # converter_input = st.sidebar.text_input("Nhập chuỗi (VD: L22_V001 / 2:16):", "L22_V001 / 2:16")
 
 # if st.sidebar.button("Tính Frame Index"):
@@ -144,7 +157,6 @@
 #             target_vid = parts[0].strip()
 #             time_str = parts[1].strip()
             
-#             # Xử lý thời gian: Hỗ trợ cả dạng giây trực tiếp (60.2) hoặc dạng phút:giây (2:16)
 #             if ":" in time_str:
 #                 time_parts = time_str.split(":")
 #                 if len(time_parts) == 2:
@@ -161,17 +173,17 @@
 #             else:
 #                 total_seconds = float(time_str)
             
-#             # Tra cứu FPS từ từ điển đã load sẵn
-#             fps = video_fps_dict.get(target_vid, 25.0) # Mặc định 25.0 nếu không tìm thấy video trong mapping
+#             fps = video_fps_dict.get(target_vid, 25.0)
 #             calc_frame = int(round(total_seconds * fps))
             
-#             # Hiển thị kết quả ngay trên sidebar
 #             st.sidebar.success(f"🎯 **Kết quả nộp:** `{target_vid} / {calc_frame}`")
 #             st.sidebar.info(f"Chi tiết: FPS của `{target_vid}` là `{fps}`, Tổng thời gian: `{total_seconds}s`")
 #         else:
 #             st.sidebar.warning("Vui lòng nhập đúng định dạng chứa dấu '/' (VD: L22_V001 / 2:16)")
 #     except Exception as ex:
-#         st.sidebar.error(f"Lỗi cú pháp: {ex}")# ==========================================
+#         st.sidebar.error(f"Lỗi cú pháp: {ex}")
+
+# # ==========================================
 # # GIAO DIỆN CHÍNH
 # # ==========================================
 # st.title("🎥 Hệ thống Tìm kiếm Video Thông Minh (Multi-Model & Temporal Reranking)")
@@ -180,7 +192,6 @@
 # else:
 #     st.markdown("Nhập câu truy vấn của bạn bằng tiếng Việt hoặc tiếng Anh để tìm kiếm các khung hình (keyframe) chính xác nhất.")
 
-# # Ô nhập query
 # default_query = "Cảnh mở cửa / Người đàn ông ngồi vào bàn" if search_type == "Temporal Sequence (Truy vấn chuỗi thời gian)" else "Cảnh quay bằng flycam một cây cầu ở TP Hồ Chí Minh"
 # query = st.text_input("🔍 Nhập nội dung tìm kiếm:", default_query)
 
@@ -196,9 +207,9 @@
 #                 if search_type == "Temporal Sequence (Truy vấn chuỗi thời gian)":
 #                     if retrieval_mode == "Single Model (Đơn mô hình)":
 #                         if single_model_choice == "siglip2":
-#                             idx_path = str(BASE_DIR / "data" / "indexes" / "siglib2.index")
+#                             idx_path = str(BASE_DIR / "data" / "indexes" / "siglip2.index")
 #                         else:
-#                             idx_path = str(BASE_DIR / "data" / "indexes" / "vit_b32.index")
+#                             idx_path = str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14.index")
                         
 #                         current_temporal_models = [{"name": single_model_choice, "index_path": idx_path}]
 #                     else:
@@ -207,7 +218,6 @@
 #                             st.stop()
 #                         current_temporal_models = selected_models
 
-#                     # 1. Thực hiện temporal retrieval trả về các chuỗi thô
 #                     retrieval_results = temporal_retrieval_multi_model_pipeline(
 #                         raw_query_string=query,
 #                         model_configs=current_temporal_models,
@@ -221,7 +231,6 @@
 #                         st.warning("Không tìm thấy chuỗi sự kiện nào thỏa mãn ràng buộc khoảng cách keyframe.")
 #                         st.stop()
 
-#                     # 2. MAPPING ĐÚNG CÁCH CHO TỪNG BƯỚC TRONG SEQUENCE PATH
 #                     for seq_item in retrieval_results:
 #                         seq_path = seq_item.get("sequence_path", [])
 #                         mapped_seq_path = []
@@ -236,90 +245,35 @@
 #                                 mapped_seq_path.append(step_cand)
 #                         seq_item["sequence_path"] = mapped_seq_path
 
-#                     # # 3. TỐI ƯU RERANKING CHO TEMPORAL
+#                     # ==========================================
+#                     # 3. TỐI ƯU RERANKING CHO TEMPORAL (Dùng temporal_sequence_reranking_optimized)
+#                     # ==========================================
 #                     # queries_list = [q.strip() for q in query.split("/") if q.strip()]
-#                     # num_queries = len(queries_list)
+                    
+#                     # Gọi trực tiếp module reranking chuyên dụng cho chuỗi thời gian
+#                     # Hàm này nhận toàn bộ danh sách chuỗi kết quả (retrieval_results) và xử lý tối ưu
+#                     final_results = temporal_sequence_reranking_optimized(
+#                         raw_query_string=query,
+#                         sequence_candidates=retrieval_results,
+#                         config_path=rerank_cfg
+#                     )
 
-#                     # for seq_cand in retrieval_results:
-#                     #     seq_path = seq_cand.get("sequence_path", [])
-#                     #     if not seq_path:
-#                     #         seq_cand["final_score"] = float(seq_cand.get("score", 0.0))
-#                     #         continue
-
-#                     #     total_final_score = 0.0
-#                     #     num_steps = len(seq_path)
-
-#                     #     for step_idx, step_frame in enumerate(seq_path):
-#                     #         sub_query = queries_list[step_idx] if step_idx < num_queries else queries_list[-1]
-                            
-#                     #         single_frame_candidate = [{
-#                     #             "vector_index": step_frame.get("vector_index"),
-#                     #             "video_id": step_frame.get("video_id"),
-#                     #             "keyframe_index": step_frame.get("keyframe_index", 0),
-#                     #             "frame_idx": step_frame.get("frame_idx", 0),
-#                     #             "pts_time": step_frame.get("pts_time", 0.0),
-#                     #             "score": step_frame.get("score", 1.0),
-#                     #             "object_entities": step_frame.get("object_entities", []),
-#                     #             "ocr_texts": step_frame.get("ocr_texts", []),
-#                     #             "asr_text": step_frame.get("asr_text", ""),
-#                     #             "metadata": step_frame.get("metadata", {})
-#                     #         }]
-
-#                     #         reranked_single = reranking_pipeline(sub_query, single_frame_candidate, rerank_cfg)
-#                     #         if reranked_single:
-#                     #             total_final_score += reranked_single[0].get("final_score", 0.0)
-
-#                     #     seq_cand["final_score"] = round(total_final_score / num_steps, 6)
-#                     # 3. TỐI ƯU RERANKING CHO TEMPORAL
-#                     queries_list = [q.strip() for q in query.split("/") if q.strip()]
-#                     num_queries = len(queries_list)
-
-#                     for seq_cand in retrieval_results:
-#                         seq_path = seq_cand.get("sequence_path", [])
-#                         if not seq_path:
-#                             seq_cand["final_score"] = float(seq_cand.get("score", 0.0))
-#                             continue
-
-#                         total_final_score = 0.0
-#                         num_steps = len(seq_path)
-
-#                         for step_idx, step_frame in enumerate(seq_path):
-#                             sub_query = queries_list[step_idx] if step_idx < num_queries else queries_list[-1]
-                            
-#                             single_frame_candidate = [{
-#                                 "vector_index": step_frame.get("vector_index"),
-#                                 "video_id": step_frame.get("video_id"),
-#                                 "keyframe_index": step_frame.get("keyframe_index", 0),
-#                                 "frame_idx": step_frame.get("frame_idx", 0),
-#                                 "pts_time": step_frame.get("pts_time", 0.0),
-#                                 "score": step_frame.get("score", 1.0),
-#                                 "object_entities": step_frame.get("object_entities", []),
-#                                 "ocr_texts": step_frame.get("ocr_texts", []),
-#                                 "asr_text": step_frame.get("asr_text", ""),
-#                                 "metadata": step_frame.get("metadata", {})
-#                             }]
-
-#                             reranked_single = reranking_pipeline(sub_query, single_frame_candidate, rerank_cfg)
-#                             if reranked_single:
-#                                 total_final_score += reranked_single[0].get("final_score", 0.0)
-
-#                         seq_cand["final_score"] = round(total_final_score / num_steps, 6)
-#                     # 4. Sắp xếp lại theo final_score trung bình và gán rank
-#                     final_results = sorted(retrieval_results, key=lambda x: x.get("final_score", 0), reverse=True)
+#                     # Sắp xếp lại theo final_score giảm dần và gán lại rank chuẩn
+#                     final_results = sorted(final_results, key=lambda x: x.get("final_score", 0), reverse=True)
 #                     for r_idx, c in enumerate(final_results, start=1):
 #                         c["rank"] = r_idx
 
 #                 # ==========================================
-#                 # LUỒNG 2: STANDARD RETRIEVAL (Truy vấn đơn thông thường)
+#                 # LUỒNG 2: STANDARD RETRIEVAL
 #                 # ==========================================
 #                 else:
 #                     if retrieval_mode == "Single Model (Đơn mô hình)":
 #                         if single_model_choice == "siglip2":
-#                             idx_path = BASE_DIR / "data" / "indexes" / "siglib2.index"
+#                             idx_path = BASE_DIR / "data" / "indexes" / "siglip2.index"
 #                             retrieval_results = siglip2_retrieval_pipeline(query, str(idx_path), ret_cfg)
-#                         else:  # clip_b32
-#                             idx_path = BASE_DIR / "data" / "indexes" / "vit_b32.index"
-#                             retrieval_results = clip_b32_retrieval_pipeline(query, str(idx_path), ret_cfg)
+#                         else:  # dfn5b_vit_h14
+#                             idx_path = BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14.index"
+#                             retrieval_results = dfn5b_vit_h14_retrieval_pipeline(query, str(idx_path), ret_cfg)
 #                     else:
 #                         if not selected_models:
 #                             st.warning("Vui lòng chọn ít nhất một mô hình trong chế độ Multi-Model!")
@@ -356,7 +310,6 @@
 #                     with st.container():
 #                         st.markdown(f"### 🏆 Top Rank: **{res['rank']}**")
                         
-#                         # --- TRƯỜNG HỢP HIỂN THỊ CHUỖI TEMPORAL SEQUENCE ---
 #                         if search_type == "Temporal Sequence (Truy vấn chuỗi thời gian)" and "sequence_path" in res:
 #                             seq_path = res["sequence_path"]
 #                             st.markdown(f"**Video ID (Chung):** `{res['video_id']}` | **Số bước chuỗi:** `{len(seq_path)} bước` | **Final Score trung bình:** `{res.get('final_score', 0):.6f}`")
@@ -379,19 +332,16 @@
 #                                         if found_files:
 #                                             full_img_path = found_files[0]
 
-#                                     # Hiển thị ảnh
 #                                     if full_img_path and Path(full_img_path).exists():
 #                                         image = Image.open(full_img_path)
 #                                         st.image(image, caption=f"Bước {step_i+1} - KF: {frame_val}", width="stretch")
 #                                     else:
 #                                         st.error(f"Không tìm thấy file: {img_filename}")
                                     
-#                                     # --- XỬ LÝ THỜI GIAN & ĐỊNH DẠNG NỘP BÀI ---
 #                                     p_time = step_cand.get('pts_time', 0.0)
 #                                     hms_str = format_pts_to_hms(p_time)
 #                                     calc_frame = get_submission_frame_info(v_id, p_time)
 
-#                                     # Hiển thị chi tiết từng bước
 #                                     st.markdown(
 #                                         f"""
 #                                         - **Video ID:** `{v_id}`  
@@ -401,8 +351,6 @@
 #                                         - 🎯 **Nộp bài:** `{v_id} / {calc_frame}`
 #                                         """
 #                                     )
-
-#                         # --- TRƯỜNG HỢP HIỂN THỊ STANDARD RETRIEVAL ---
 #                         else:
 #                             col1, col2 = st.columns([1, 2])
 #                             with col1:
@@ -454,7 +402,59 @@
 #                                 objects = res.get("object_entities", [])
 #                                 if objects:
 #                                     st.markdown(f"**Detected Objects:** {', '.join(objects[:10])}")
-                                    
+#                                 # --- MODULE PHÁT VIDEO THÔNG MINH & TỰ ĐỘNG BẮT PTS_TIME ---
+#                                 video_file_path = get_video_path(video_id)
+#                                 with st.expander(f"🎬 Phát video gốc & Tự động lấy PTS_TIME: {video_id}"):
+#                                     if video_file_path and os.path.exists(video_file_path):
+#                                         # Đọc file video thành dạng base64 để nhúng vào HTML5 video player tùy chỉnh
+#                                         import base64
+#                                         with open(video_file_path, "rb") as f:
+#                                             video_bytes = f.read()
+#                                         video_base64 = base64.b64encode(video_bytes).decode('utf-8')
+                                        
+#                                         # Lấy FPS của video từ dictionary
+#                                         current_fps = video_fps_dict.get(str(video_id), 25.0)
+                                        
+#                                         # Tạo HTML/JS Player cho phép tự động trích xuất pts_time khi bấm Pause hoặc tua
+#                                         video_html = f"""
+#                                         <div>
+#                                             <video id="video_{video_id}_{res.get('keyframe_index', 0)}" width="100%" controls style="border-radius: 8px;">
+#                                                 <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
+#                                                 Trình duyệt của bạn không hỗ trợ thẻ video.
+#                                             </video>
+#                                             <div style="margin-top: 10px; padding: 10px; background: #f0f2f6; border-radius: 5px; font-family: monospace;">
+#                                                 <b>⏱️ PTS Time hiện tại:</b> <span id="time_{video_id}_{res.get('keyframe_index', 0)}">0.00</span> giây<br>
+#                                                 <b>🎯 Định dạng nộp bài:</b> <span id="sub_{video_id}_{res.get('keyframe_index', 0)}" style="color: green; font-weight: bold;">{video_id} / 0</span>
+#                                             </div>
+#                                         </div>
+
+#                                         <script>
+#                                         const vid = document.getElementById("video_{video_id}_{res.get('keyframe_index', 0)}");
+#                                         const timeDisplay = document.getElementById("time_{video_id}_{res.get('keyframe_index', 0)}");
+#                                         const subDisplay = document.getElementById("sub_{video_id}_{res.get('keyframe_index', 0)}");
+#                                         const fps = {current_fps};
+#                                         const videoId = "{video_id}";
+
+#                                         // Tua sẵn video đến mốc pts_time gợi ý từ hệ thống tìm kiếm
+#                                         vid.currentTime = {float(p_time)};
+
+#                                         vid.addEventListener('timeupdate', function() {{
+#                                             let currentTime = vid.currentTime;
+#                                             timeDisplay.innerText = currentTime.toFixed(2);
+                                            
+#                                             // Tính toán trực tiếp frame_idx bằng Javascript theo công thức chuẩn
+#                                             let frameIdx = Math.round(currentTime * fps);
+#                                             subDisplay.innerText = videoId + " / " + frameIdx;
+#                                         }});
+#                                         </script>
+#                                         """
+                                        
+#                                         # Hiển thị component HTML/JS tương tác trực tiếp lên Streamlit
+#                                         st.components.v1.html(video_html, height=420)
+                                        
+#                                         st.info("💡 **Cách dùng:** Bạn chỉ cần bấm phát video, tua hoặc bấm dừng (Pause) tại khoảnh khắc mong muốn. Khung giao diện bên dưới sẽ tự động cập nhật chính xác mốc `pts_time` và sinh ra chuỗi **`video_id / frame_idx`** để bạn copy đi nộp bài!")
+#                                     else:
+#                                         st.warning(f"⚠️ Không tìm thấy file video cho `{video_id}` tại đường dẫn `C:\\Users\\Public\\Documents`.")
 #                         st.divider()
 
 #             except Exception as e:
@@ -467,6 +467,7 @@ from pathlib import Path
 from PIL import Image
 import sys
 import json
+import os
 from src.reranking.temporal_reranking_pipeline import temporal_sequence_reranking_optimized
 
 # Thêm đường dẫn gốc của project vào sys.path để import các module bên trong src
@@ -495,6 +496,18 @@ MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_mapping.json"
 RETRIEVAL_CONFIG = BASE_DIR / "configs" / "retrieval.yaml"
 RERANK_CONFIG = BASE_DIR / "configs" / "reranking.yaml"
 VIDEO_FPS_MAPPING_PATH = BASE_DIR / "data" / "mapping" / "video_fps_mapping.json"
+
+# Thư mục chứa video gốc theo đúng yêu cầu của bạn
+VIDEO_DIR = r"C:\Users\Public\Documents"
+
+def get_video_path(video_id):
+    """Tìm file video trong thư mục Public/Documents hỗ trợ nhiều định dạng"""
+    extensions = [".mp4", ".avi", ".mkv", ".mov", ".MP4"]
+    for ext in extensions:
+        video_path = os.path.join(VIDEO_DIR, f"{video_id}{ext}")
+        if os.path.exists(video_path):
+            return video_path
+    return None
 
 @st.cache_resource
 def load_pipeline_configs():
@@ -571,7 +584,7 @@ else:
     if use_siglip2:
         selected_models.append({
             "name": "siglip2", 
-            "index_path": str(BASE_DIR / "data" / "indexes" / "siglib2.index")
+            "index_path": str(BASE_DIR / "data" / "indexes" / "siglip2.index")
         })
     if use_dfn5b:
         selected_models.append({
@@ -657,7 +670,7 @@ if st.button("🚀 Thực hiện Tìm kiếm", type="primary"):
                 if search_type == "Temporal Sequence (Truy vấn chuỗi thời gian)":
                     if retrieval_mode == "Single Model (Đơn mô hình)":
                         if single_model_choice == "siglip2":
-                            idx_path = str(BASE_DIR / "data" / "indexes" / "siglib2.index")
+                            idx_path = str(BASE_DIR / "data" / "indexes" / "siglip2.index")
                         else:
                             idx_path = str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14.index")
                         
@@ -695,20 +708,12 @@ if st.button("🚀 Thực hiện Tìm kiếm", type="primary"):
                                 mapped_seq_path.append(step_cand)
                         seq_item["sequence_path"] = mapped_seq_path
 
-                    # ==========================================
-                    # 3. TỐI ƯU RERANKING CHO TEMPORAL (Dùng temporal_sequence_reranking_optimized)
-                    # ==========================================
-                    # queries_list = [q.strip() for q in query.split("/") if q.strip()]
-                    
-                    # Gọi trực tiếp module reranking chuyên dụng cho chuỗi thời gian
-                    # Hàm này nhận toàn bộ danh sách chuỗi kết quả (retrieval_results) và xử lý tối ưu
                     final_results = temporal_sequence_reranking_optimized(
                         raw_query_string=query,
                         sequence_candidates=retrieval_results,
                         config_path=rerank_cfg
                     )
 
-                    # Sắp xếp lại theo final_score giảm dần và gán lại rank chuẩn
                     final_results = sorted(final_results, key=lambda x: x.get("final_score", 0), reverse=True)
                     for r_idx, c in enumerate(final_results, start=1):
                         c["rank"] = r_idx
@@ -719,7 +724,7 @@ if st.button("🚀 Thực hiện Tìm kiếm", type="primary"):
                 else:
                     if retrieval_mode == "Single Model (Đơn mô hình)":
                         if single_model_choice == "siglip2":
-                            idx_path = BASE_DIR / "data" / "indexes" / "siglib2.index"
+                            idx_path = BASE_DIR / "data" / "indexes" / "siglip2.index"
                             retrieval_results = siglip2_retrieval_pipeline(query, str(idx_path), ret_cfg)
                         else:  # dfn5b_vit_h14
                             idx_path = BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14.index"
@@ -734,7 +739,14 @@ if st.button("🚀 Thực hiện Tìm kiếm", type="primary"):
                             model_configs=selected_models,
                             config_path=ret_cfg
                         )
+                        print("="*50)
+                        print("STREAMLIT")
 
+                        for r in retrieval_results[:10]:
+                            print(
+                                r["vector_index"],
+                                r["score"]
+                            )
                     if len(retrieval_results) == 0:
                         st.warning("Không tìm thấy kết quả phù hợp từ bước Retrieval.")
                         st.stop()
@@ -852,7 +864,20 @@ if st.button("🚀 Thực hiện Tìm kiếm", type="primary"):
                                 objects = res.get("object_entities", [])
                                 if objects:
                                     st.markdown(f"**Detected Objects:** {', '.join(objects[:10])}")
-                                    
+                                
+                                # --- MODULE PHÁT VIDEO GỐC SỬ DỤNG ST.VIDEO (AN TOÀN RAM) ---
+                                video_file_path = get_video_path(video_id)
+                                with st.expander(f"🎬 Phát video gốc (st.video): {video_id}"):
+                                    if video_file_path and os.path.exists(video_file_path):
+                                        # Dùng trực tiếp st.video chuẩn của Streamlit kèm theo tham số start_time
+                                        st.video(video_file_path, start_time=int(p_time))
+                                        
+                                        st.info(
+                                            f"💡 **Hướng dẫn:** Video đã tự động nhảy tới mốc thời gian khoảng **{p_time:.2f} giây** ({hms_str}). "
+                                            f"Định dạng nộp bài của keyframe này là: **`{video_id} / {calc_frame}`**"
+                                        )
+                                    else:
+                                        st.warning(f"⚠️ Không tìm thấy file video cho `{video_id}` tại đường dẫn `C:\\Users\\Public\\Documents`.")
                         st.divider()
 
             except Exception as e:

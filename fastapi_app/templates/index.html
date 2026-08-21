@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Search & Submission System - AIC 2026</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="app-layout">
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fa-solid fa-film logo-icon"></i>
+                    <div>
+                        <h2>AIC 2026 System</h2>
+                        <span class="badge-fastapi"><i class="fa-solid fa-bolt"></i> FastAPI Engine</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-content">
+                <div class="section-title">
+                    <i class="fa-solid fa-sliders"></i> Tùy chỉnh Hệ thống
+                </div>
+
+                <!-- 1. Search Type -->
+                <div class="form-group">
+                    <label for="searchType"><i class="fa-solid fa-magnifying-glass"></i> Kiểu Truy vấn:</label>
+                    <select id="searchType" class="form-control">
+                        <option value="standard" selected>Standard Retrieval (Truy vấn đơn)</option>
+                        <option value="temporal">Temporal Sequence (Chuỗi thời gian)</option>
+                    </select>
+                </div>
+
+                <!-- 2. Retrieval Mode -->
+                <div class="form-group">
+                    <label><i class="fa-solid fa-cubes"></i> Chế độ Retrieval:</label>
+                    <div class="radio-group">
+                        <label class="radio-label">
+                            <input type="radio" name="retrievalMode" value="multi" checked>
+                            <span>Multi-Model Ensemble</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="retrievalMode" value="single">
+                            <span>Single Model (Đơn mô hình)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Multi-Model Checkboxes -->
+                <div id="multiModelSettings" class="sub-panel">
+                    <label class="sub-label">Các Model tham gia Ensemble:</label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="useSiglip2" checked>
+                        <span>SigLIP 2</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="useDfn5b" checked>
+                        <span>DFN5B ViT-H/14</span>
+                    </label>
+                </div>
+
+                <!-- Single Model Select -->
+                <div id="singleModelSettings" class="sub-panel" style="display: none;">
+                    <label for="singleModelChoice" class="sub-label">Chọn Model đơn lẻ:</label>
+                    <select id="singleModelChoice" class="form-control">
+                        <option value="siglip2" selected>SigLIP 2</option>
+                        <option value="dfn5b_vit_h14">DFN5B ViT-H/14</option>
+                    </select>
+                </div>
+
+                <!-- Top K Slider -->
+                <div class="form-group">
+                    <div class="slider-header">
+                        <label for="topKSlider"><i class="fa-solid fa-list-ol"></i> Số kết quả (Top K):</label>
+                        <span id="topKValue" class="slider-val">20</span>
+                    </div>
+                    <input type="range" id="topKSlider" min="10" max="100" step="10" value="20" class="slider">
+                </div>
+
+                <!-- Temporal Extra Settings -->
+                <div id="temporalSettings" class="sub-panel" style="display: none;">
+                    <div class="sub-header"><i class="fa-solid fa-clock-rotate-left"></i> Cấu hình Temporal Beam Search</div>
+                    
+                    <div class="form-group">
+                        <div class="slider-header">
+                            <label for="maxKfGap">Khoảng cách KF tối đa:</label>
+                            <span id="maxKfGapVal" class="slider-val">150</span>
+                        </div>
+                        <input type="range" id="maxKfGap" min="1" max="500" step="10" value="150" class="slider">
+                    </div>
+
+                    <div class="form-group">
+                        <div class="slider-header">
+                            <label for="minKfGap">Khoảng cách KF tối thiểu:</label>
+                            <span id="minKfGapVal" class="slider-val">0</span>
+                        </div>
+                        <input type="range" id="minKfGap" min="0" max="50" step="1" value="0" class="slider">
+                    </div>
+
+                    <div class="form-group">
+                        <div class="slider-header">
+                            <label for="beamWidth">Beam Width (Độ rộng nhánh):</label>
+                            <span id="beamWidthVal" class="slider-val">5</span>
+                        </div>
+                        <input type="range" id="beamWidth" min="1" max="50" step="1" value="5" class="slider">
+                    </div>
+                </div>
+
+                <!-- Converter Section -->
+                <div class="converter-box">
+                    <div class="converter-title">
+                        <i class="fa-solid fa-calculator"></i> Converter: Video/Time → Frame
+                    </div>
+                    <p class="converter-desc">Chuyển đổi mốc thời gian sang mã nộp bài:</p>
+                    <div class="converter-input-group">
+                        <input type="text" id="converterInput" placeholder="VD: L22_V001 / 2:16" value="L22_V001 / 2:16" class="form-control">
+                        <button id="btnConvert" class="btn btn-secondary"><i class="fa-solid fa-play"></i> Tính</button>
+                    </div>
+                    <div id="converterResult" class="converter-result" style="display: none;">
+                        <div class="result-string" id="convertedString">L22_V001 / 3400</div>
+                        <div class="result-details" id="convertedDetails">FPS: 25.0 | Tổng: 136.0s</div>
+                        <button class="btn btn-sm btn-copy" onclick="copyText(document.getElementById('convertedString').innerText)">
+                            <i class="fa-solid fa-copy"></i> Sao chép
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT AREA -->
+        <main class="main-content">
+            <!-- TOP BAR / HERO -->
+            <div class="hero-section">
+                <h1>🎥 Hệ thống Tìm kiếm Video Thông Minh</h1>
+                <p id="modeDescription" class="hero-desc">
+                    Nhập câu truy vấn của bạn bằng tiếng Việt hoặc tiếng Anh để tìm kiếm các khung hình (keyframe) chính xác nhất.
+                </p>
+
+                <!-- SEARCH BAR -->
+                <div class="search-box-container">
+                    <div class="search-input-wrapper">
+                        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                        <input type="text" id="queryInput" placeholder="Nhập nội dung tìm kiếm..." class="search-input">
+                        <button id="btnClearQuery" class="btn-clear" title="Xóa nội dung"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <button id="btnSearch" class="btn btn-primary btn-search">
+                        <i class="fa-solid fa-rocket"></i> Thực hiện Tìm kiếm
+                    </button>
+                </div>
+            </div>
+
+            <!-- LOADING SPINNER -->
+            <div id="loadingIndicator" class="loading-container" style="display: none;">
+                <div class="spinner"></div>
+                <p class="loading-text">Đang thực hiện Retrieval, Mapping và Reranking đa tầng...</p>
+            </div>
+
+            <!-- SEARCH RESULTS AREA -->
+            <div id="resultsArea" class="results-container">
+                <!-- Sẽ được render động bằng JavaScript -->
+            </div>
+        </main>
+    </div>
+
+    <!-- TOAST NOTIFICATION -->
+    <div id="toast" class="toast">
+        <i class="fa-solid fa-circle-check"></i> <span id="toastMsg">Đã sao chép!</span>
+    </div>
+
+    <!-- SCRIPTS -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

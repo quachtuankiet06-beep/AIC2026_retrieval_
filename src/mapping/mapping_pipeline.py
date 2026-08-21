@@ -84,7 +84,27 @@ def mapping_pipeline(
             continue
 
         mapping_record = mapping_db[vector_index]
-
+        ##################################################################
+        # Chuẩn hóa lại ocr_texts để đảm bảo đồng bộ định dạng với reranking_pipeline
+        raw_ocr = mapping_record.get("ocr_texts", [])
+        normalized_ocr = []
+        
+        for ocr_item in raw_ocr:
+            if isinstance(ocr_item, dict):
+                # Đã chuẩn dạng mới {"text": ..., "score": ...}
+                normalized_ocr.append({
+                    "text": str(ocr_item.get("text", "")).strip().lower(),
+                    "score": float(ocr_item.get("score", 1.0))
+                })
+            elif isinstance(ocr_item, str):
+                # Hỗ trợ tương thích ngược nếu record cũ còn lưu dạng string thô
+                text_val = str(ocr_item).strip().lower()
+                if text_val:
+                    normalized_ocr.append({
+                        "text": text_val,
+                        "score": 1.0
+                    })
+        #################################################################
         candidate = {
 
             # Retrieval information
