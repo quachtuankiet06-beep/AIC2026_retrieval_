@@ -62,3 +62,8 @@ videos_placeholder/
 
 # Environment file (chứa secrets, không commit)
 .env
+# ==========================================================
+# Tools / Streamlit / AI Agents
+# ==========================================================
+.streamlit/
+.agent/
