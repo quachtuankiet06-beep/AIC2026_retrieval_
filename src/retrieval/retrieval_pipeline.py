@@ -103,16 +103,16 @@ def decompose_standard_narrative_query(query_text):
             print(f"  -> Q_Context: '{q_context}'")
             return [query_text, q_main, q_context]
             
-    # 2. Thử tách theo dấu câu nếu câu dài chứa nhiều mệnh đề
-    sentences = [s.strip() for s in re.split(r"[.\n]+", query_text) if len(s.strip()) > 10]
-    if len(sentences) >= 2 and len(query_text.split()) > 15:
-        q_main = sentences[0]
-        q_context = " ".join(sentences[1:])
-        print(f"[INFO] Narrative Query Decomposition (Standard Search):")
-        print(f"  -> Q_Full   : '{query_text}'")
-        print(f"  -> Q_Anchor : '{q_main}'")
-        print(f"  -> Q_Context: '{q_context}'")
-        return [query_text, q_main, q_context]
+    # # 2. Thử tách theo dấu câu nếu câu dài chứa nhiều mệnh đề
+    # sentences = [s.strip() for s in re.split(r"[.\n]+", query_text) if len(s.strip()) > 10]
+    # if len(sentences) >= 2 and len(query_text.split()) > 15:
+    #     q_main = sentences[0]
+    #     q_context = " ".join(sentences[1:])
+    #     print(f"[INFO] Narrative Query Decomposition (Standard Search):")
+    #     print(f"  -> Q_Full   : '{query_text}'")
+    #     print(f"  -> Q_Anchor : '{q_main}'")
+    #     print(f"  -> Q_Context: '{q_context}'")
+    #     return [query_text, q_main, q_context]
         
     return [query_text]
 
@@ -140,16 +140,16 @@ def expand_and_translate_query(query_text):
         return query_text
 
     # # --- TẦNG 1: Thử Google Translate trước ---
-    # try:
-    #     translator = GoogleTranslator(source='vi', target='en')
-    #     translated = translator.translate(query_text)
+    try:
+        translator = GoogleTranslator(source='vi', target='en')
+        translated = translator.translate(query_text)
         
-    #     if translated and translated.strip():
-    #         print(f"[INFO] Google Translate Success: '{query_text}' -> '{translated}'")
-    #         time.sleep(1) # Nghỉ nhẹ chống spam
-    #         return translated
-    # except Exception as e:
-    #     print(f"[WARNING] Google Translate thất bại ({e}), chuyển sang Local Fallback...")
+        if translated and translated.strip():
+            print(f"[INFO] Google Translate Success: '{query_text}' -> '{translated}'")
+            time.sleep(1) # Nghỉ nhẹ chống spam
+            return translated
+    except Exception as e:
+        print(f"[WARNING] Google Translate thất bại ({e}), chuyển sang Local Fallback...")
 
     # --- TẦNG 2: Fallback sang NLLB-200 Distilled 1.3B ---
     try:
