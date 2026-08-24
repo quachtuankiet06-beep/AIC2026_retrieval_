@@ -1513,7 +1513,7 @@ def compute_video_narrative_bonus(candidate_list, query_text):
 
     q_lower = str(query_text).lower()
     has_narrative = any(kw in q_lower for kw in [
-        "sau đó", "tiếp theo", "kế tiếp", "đoạn sau", "rồi", "về đích", "trước đó", "biết sau đó"
+        "sau đó","tiếp ngay sau đó", "tiếp theo", "kế tiếp", "đoạn sau", "rồi", "về đích", "trước đó", "biết sau đó"
     ]) or (len(query_text.split()) > 15 and ("." in query_text or "," in query_text))
 
     # Đếm số lượng candidate của từng video_id

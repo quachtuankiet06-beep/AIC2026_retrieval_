@@ -10,33 +10,91 @@ from deep_translator import GoogleTranslator
 import faiss
 import clip  # Thư viện openai-clip cho ViT-B/32
 import open_clip
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 import time
+import gc
 
+# # Cache cho NLLB-200 để không phải load đi load lại nặng VRAM
+# _NLLB_CACHE = {"model": None, "tokenizer": None}
+# def get_nllib_translator(device="cpu"):
+#     """
+#     Load NLLB-200 chạy hoàn toàn trên CPU để tiết kiệm VRAM cho các model Vision.
+#     """
+#     if _NLLB_CACHE["model"] is None:
+#         model_name = "facebook/nllb-200-distilled-1.3B"
+#         print(f"[INFO] Loading Fallback Local Translator ({model_name}) on CPU...")
+#         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-# Cache cho NLLB-200 để không phải load đi load lại nặng VRAM
-_NLLB_CACHE = {"model": None, "tokenizer": None}
-def get_nllib_translator(device="cpu"):
-    """
-    Load NLLB-200 chạy hoàn toàn trên CPU để tiết kiệm VRAM cho các model Vision.
-    """
-    if _NLLB_CACHE["model"] is None:
-        model_name = "facebook/nllb-200-distilled-1.3B"
-        print(f"[INFO] Loading Fallback Local Translator ({model_name}) on CPU...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-        # Force load model sang CPU với float32
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.float32
-        ).to(device)
-        model.eval()
+#         # Force load model sang CPU với float32
+#         model = AutoModelForSeq2SeqLM.from_pretrained(
+#             model_name,
+#             torch_dtype=torch.float32
+#         ).to(device)
+#         model.eval()
         
-        _NLLB_CACHE["tokenizer"] = tokenizer
-        _NLLB_CACHE["model"] = model
-    return _NLLB_CACHE["tokenizer"], _NLLB_CACHE["model"]
+#         _NLLB_CACHE["tokenizer"] = tokenizer
+#         _NLLB_CACHE["model"] = model
+#     return _NLLB_CACHE["tokenizer"], _NLLB_CACHE["model"]
+def translate_with_qwen(query_text, device="cpu"):
+    """
+    Load Qwen2.5-1.5B-Instruct trên CPU, dịch thuật ngữ cảnh và giải phóng RAM ngay lập tức.
+    """
+    model_name = "Qwen/Qwen2.5-1.5B-Instruct"
+    print(f"[INFO] Loading Fallback Local Translator ({model_name}) on CPU...")
 
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.float32,
+        device_map=device
+    )
+    model.eval()
+
+    # System prompt tối ưu hóa cho bài toán Video Retrieval Search
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a precise Vietnamese-to-English translator for image and video retrieval. "
+                "Translate the text into clear, concise English. Output ONLY the translated text without explanations, intro, or quotes."
+            )
+        },
+        {"role": "user", "content": query_text}
+    ]
+
+    prompt_text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True
+    )
+
+    inputs = tokenizer([prompt_text], return_tensors="pt").to(device)
+
+    with torch.no_grad():
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=128,
+            do_sample=False,  # Greedy search để cho ra bản dịch chính xác nhất
+            temperature=0.0
+        )
+        # Tách phần prompt đầu vào ra khỏi token sinh mới
+        generated_ids = [
+            output_ids[len(input_ids):]
+            for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
+        ]
+        translated = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+
+    # Giải phóng hoàn toàn trọng số mô hình khỏi RAM hệ thống
+    del model
+    del tokenizer
+    del inputs
+    del generated_ids
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
+    return translated
 
 _SIGLIP2_CACHE = {
     "processor": None,
@@ -129,63 +187,99 @@ def decompose_standard_narrative_query(query_text):
 #         return query_text
 # import time
 
+# def expand_and_translate_query(query_text):
+#     """
+#     Chiến thuật Fallback Translator 3 tầng:
+#     Tầng 1: Google Translate (Chủ đạo)
+#     Tầng 2: NLLB-200 Distilled 1.3B (Local Offline)
+#     Tầng 3: Giữ nguyên query gốc
+#     """
+#     if not query_text or not query_text.strip():
+#         return query_text
+
+#     # # --- TẦNG 1: Thử Google Translate trước ---
+#     try:
+#         translator = GoogleTranslator(source='vi', target='en')
+#         translated = translator.translate(query_text)
+        
+#         if translated and translated.strip():
+#             print(f"[INFO] Google Translate Success: '{query_text}' -> '{translated}'")
+#             time.sleep(2) # Nghỉ nhẹ chống spam
+#             return translated
+#     except Exception as e:
+#         print(f"[WARNING] Google Translate thất bại ({e}), chuyển sang Local Fallback...")
+
+#     # --- TẦNG 2: Fallback sang NLLB-200 Distilled 1.3B ---
+#     try:
+#         import gc
+#         import torch
+
+#         device = "cpu"
+#         tokenizer, model = get_nllib_translator(device)
+        
+#         # NLLB yêu cầu chỉ định rõ mã ngôn ngữ (Tiếng Việt: vie_Latn, Tiếng Anh: eng_Latn)
+#         tokenizer.src_lang = "vie_Latn"
+#         inputs = tokenizer(query_text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+        
+#         with torch.no_grad():
+#             translated_tokens = model.generate(
+#                 **inputs, 
+#                 forced_bos_token_id=tokenizer.convert_tokens_to_ids("eng_Latn"), 
+#                 max_new_tokens=128
+#             )
+            
+#         translated = tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
+#         # GIẢI PHÓNG TRIỆT ĐỂ KHỎI RAM NGAY LẬP TỨC SAU KHI DỊCH XONG
+#         del model
+#         del tokenizer
+#         del inputs
+#         del translated_tokens
+        
+#         if torch.cuda.is_available():
+#             torch.cuda.empty_cache()
+#         gc.collect()
+#         if translated and translated.strip():
+#             print(f"[INFO] NLLB-200 Fallback Success: '{query_text}' -> '{translated}'")
+#             return translated
+            
+#     except Exception as e:
+#         print(f"[WARNING] NLLB-200 Fallback cũng thất bại ({e}).")
+#     print(f"[WARNING] Giữ nguyên query gốc: '{query_text}'")
+#     return query_text
+
 def expand_and_translate_query(query_text):
     """
     Chiến thuật Fallback Translator 3 tầng:
     Tầng 1: Google Translate (Chủ đạo)
-    Tầng 2: NLLB-200 Distilled 1.3B (Local Offline)
+    Tầng 2: Qwen2.5-1.5B-Instruct (Local Offline trên CPU)
     Tầng 3: Giữ nguyên query gốc
     """
     if not query_text or not query_text.strip():
         return query_text
 
-    # # --- TẦNG 1: Thử Google Translate trước ---
+    # --- TẦNG 1: Thử Google Translate trước ---
     try:
         translator = GoogleTranslator(source='vi', target='en')
         translated = translator.translate(query_text)
         
         if translated and translated.strip():
             print(f"[INFO] Google Translate Success: '{query_text}' -> '{translated}'")
-            time.sleep(2) # Nghỉ nhẹ chống spam
+            time.sleep(2)  # Nghỉ nhẹ chống spam rate limit
             return translated
     except Exception as e:
         print(f"[WARNING] Google Translate thất bại ({e}), chuyển sang Local Fallback...")
 
-    # --- TẦNG 2: Fallback sang NLLB-200 Distilled 1.3B ---
+    # --- TẦNG 2: Fallback sang Qwen2.5-1.5B-Instruct ---
     try:
-        import gc
-        import torch
-
-        device = "cpu"
-        tokenizer, model = get_nllib_translator(device)
-        
-        # NLLB yêu cầu chỉ định rõ mã ngôn ngữ (Tiếng Việt: vie_Latn, Tiếng Anh: eng_Latn)
-        tokenizer.src_lang = "vie_Latn"
-        inputs = tokenizer(query_text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
-        
-        with torch.no_grad():
-            translated_tokens = model.generate(
-                **inputs, 
-                forced_bos_token_id=tokenizer.convert_tokens_to_ids("eng_Latn"), 
-                max_new_tokens=128
-            )
-            
-        translated = tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
-        # GIẢI PHÓNG TRIỆT ĐỂ KHỎI RAM NGAY LẬP TỨC SAU KHI DỊCH XONG
-        del model
-        del tokenizer
-        del inputs
-        del translated_tokens
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
+        translated = translate_with_qwen(query_text, device="cpu")
         if translated and translated.strip():
-            print(f"[INFO] NLLB-200 Fallback Success: '{query_text}' -> '{translated}'")
+            print(f"[INFO] Qwen2.5-1.5B Fallback Success: '{query_text}' -> '{translated}'")
             return translated
             
     except Exception as e:
-        print(f"[WARNING] NLLB-200 Fallback cũng thất bại ({e}).")
+        print(f"[WARNING] Qwen2.5-1.5B Fallback cũng thất bại ({e}).")
+
+    # --- TẦNG 3: Giữ nguyên query gốc ---
     print(f"[WARNING] Giữ nguyên query gốc: '{query_text}'")
     return query_text
 
