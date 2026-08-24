@@ -146,7 +146,7 @@ def expand_and_translate_query(query_text):
         
         if translated and translated.strip():
             print(f"[INFO] Google Translate Success: '{query_text}' -> '{translated}'")
-            time.sleep(1) # Nghỉ nhẹ chống spam
+            time.sleep(2) # Nghỉ nhẹ chống spam
             return translated
     except Exception as e:
         print(f"[WARNING] Google Translate thất bại ({e}), chuyển sang Local Fallback...")
