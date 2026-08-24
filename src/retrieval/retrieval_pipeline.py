@@ -10,6 +10,34 @@ from deep_translator import GoogleTranslator
 import faiss
 import clip  # Thư viện openai-clip cho ViT-B/32
 import open_clip
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+import torch
+import time
+
+
+# Cache cho NLLB-200 để không phải load đi load lại nặng VRAM
+_NLLB_CACHE = {"model": None, "tokenizer": None}
+def get_nllib_translator(device="cpu"):
+    """
+    Load NLLB-200 chạy hoàn toàn trên CPU để tiết kiệm VRAM cho các model Vision.
+    """
+    if _NLLB_CACHE["model"] is None:
+        model_name = "facebook/nllb-200-distilled-1.3B"
+        print(f"[INFO] Loading Fallback Local Translator ({model_name}) on CPU...")
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        # Force load model sang CPU với float32
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float32
+        ).to(device)
+        model.eval()
+        
+        _NLLB_CACHE["tokenizer"] = tokenizer
+        _NLLB_CACHE["model"] = model
+    return _NLLB_CACHE["tokenizer"], _NLLB_CACHE["model"]
+
+
 _SIGLIP2_CACHE = {
     "processor": None,
     "model": None
@@ -88,23 +116,82 @@ def decompose_standard_narrative_query(query_text):
         
     return [query_text]
 
+# def expand_and_translate_query(query_text):
+#     """
+#     Tự động dịch query tiếng Việt sang tiếng Anh và chuẩn hóa để tối ưu cho mô hình.
+#     """
+#     try:
+#         translated = GoogleTranslator(source='vi', target='en').translate(query_text)
+#         print(f"[INFO] Query Expansion: '{query_text}' -> '{translated}'")
+#         return translated if translated else query_text
+#     except Exception as e:
+#         print(f"[WARNING] Lỗi dịch query ({e}), giữ nguyên query gốc.")
+#         return query_text
+# import time
+
 def expand_and_translate_query(query_text):
     """
-    Tự động dịch query tiếng Việt sang tiếng Anh và chuẩn hóa để tối ưu cho mô hình.
+    Chiến thuật Fallback Translator 3 tầng:
+    Tầng 1: Google Translate (Chủ đạo)
+    Tầng 2: NLLB-200 Distilled 1.3B (Local Offline)
+    Tầng 3: Giữ nguyên query gốc
     """
-    try:
-        translated = GoogleTranslator(source='auto', target='english').translate(query_text)
-        print(f"[INFO] Query Expansion: '{query_text}' -> '{translated}'")
-        return translated if translated else query_text
-    except Exception as e:
-        print(f"[WARNING] Lỗi dịch query ({e}), giữ nguyên query gốc.")
+    if not query_text or not query_text.strip():
         return query_text
+
+    # # --- TẦNG 1: Thử Google Translate trước ---
+    # try:
+    #     translator = GoogleTranslator(source='vi', target='en')
+    #     translated = translator.translate(query_text)
+        
+    #     if translated and translated.strip():
+    #         print(f"[INFO] Google Translate Success: '{query_text}' -> '{translated}'")
+    #         time.sleep(1) # Nghỉ nhẹ chống spam
+    #         return translated
+    # except Exception as e:
+    #     print(f"[WARNING] Google Translate thất bại ({e}), chuyển sang Local Fallback...")
+
+    # --- TẦNG 2: Fallback sang NLLB-200 Distilled 1.3B ---
+    try:
+        import gc
+        import torch
+
+        device = "cpu"
+        tokenizer, model = get_nllib_translator(device)
+        
+        # NLLB yêu cầu chỉ định rõ mã ngôn ngữ (Tiếng Việt: vie_Latn, Tiếng Anh: eng_Latn)
+        tokenizer.src_lang = "vie_Latn"
+        inputs = tokenizer(query_text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+        
+        with torch.no_grad():
+            translated_tokens = model.generate(
+                **inputs, 
+                forced_bos_token_id=tokenizer.convert_tokens_to_ids("eng_Latn"), 
+                max_new_tokens=128
+            )
+            
+        translated = tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
+        # GIẢI PHÓNG TRIỆT ĐỂ KHỎI RAM NGAY LẬP TỨC SAU KHI DỊCH XONG
+        del model
+        del tokenizer
+        del inputs
+        del translated_tokens
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        if translated and translated.strip():
+            print(f"[INFO] NLLB-200 Fallback Success: '{query_text}' -> '{translated}'")
+            return translated
+            
+    except Exception as e:
+        print(f"[WARNING] NLLB-200 Fallback cũng thất bại ({e}).")
+    print(f"[WARNING] Giữ nguyên query gốc: '{query_text}'")
+    return query_text
 
 def load_config(config_path):
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
-
-
 # ==========================================================
 # 1. SIGLIP 2 PIPELINE
 # ==========================================================
@@ -178,61 +265,6 @@ def siglip2_retrieval_pipeline(query_text, index_path, config_path):
     return results
 
 
-# ==========================================================
-# 2. CLIP ViT-B/32 PIPELINE (MỚI BỔ SUNG)
-# ==========================================================
-
-# _CLIP_CACHE = {"model": None}
-
-# def get_clip_b32_model(device="cuda"):
-#     if _CLIP_CACHE["model"] is None:
-#         print("[INFO] Loading OpenAI CLIP ViT-B/32...")
-#         model, _ = clip.load("ViT-B/32", device=device)
-#         model.eval()
-#         _CLIP_CACHE["model"] = model
-#     return _CLIP_CACHE["model"]
-
-# def clip_b32_retrieval_pipeline(query_text, index_path, config_path):
-#     query_text = expand_and_translate_query(query_text)
-#     cfg = load_config(config_path)
-
-#     top_k = cfg.get("top_k", 100)
-#     threshold = cfg.get("retrieval_threshold", 0.0)
-#     device = "cuda" if torch.cuda.is_available() else "cpu"
-
-#     model = get_clip_b32_model(device)
-    
-#     # Tokenize query theo chuẩn CLIP
-#     try:
-#         text_tokens = clip.tokenize([query_text], truncate=True).to(device)
-#     except TypeError:
-#         # Phòng hờ version clip cũ không hỗ trợ tham số truncate
-#         words = query_text.split()
-#         if len(words) > 55:
-#             query_text = " ".join(words[:55])
-#         text_tokens = clip.tokenize([query_text]).to(device)
-
-#     with torch.no_grad():
-#         text_features = model.encode_text(text_tokens)
-#         # BẮT BUỘC chuẩn hóa L2 tuyệt đối cho CLIP ViT-B/32
-#         text_features = F.normalize(text_features, p=2, dim=-1)
-
-#     query_embedding = text_features.cpu().numpy().astype(np.float32)
-
-#     print("[INFO] Loading CLIP ViT-B/32 FAISS index...")
-#     index = get_faiss_index(index_path)
-#     scores, indices = index.search(query_embedding, top_k)
-
-#     results = []
-#     rank = 1
-#     for score, idx in zip(scores[0], indices[0]):
-#         if idx == -1 or score < threshold:
-#             continue
-#         results.append({"rank": rank, "vector_index": int(idx), "score": float(score)})
-#         rank += 1
-
-#     print(f"[INFO] CLIP ViT-B/32 Retrieval returned {len(results)} candidates.")
-#     return results
 # ==========================================================
 # 3. DFN5B-CLIP-ViT-H-14 PIPELINE (MỚI BỔ SUNG)
 # ==========================================================
