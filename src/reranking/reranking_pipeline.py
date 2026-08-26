@@ -13,7 +13,8 @@ import faiss
 import torch
 import torch.nn.functional as F
 import psutil
-
+from rank_bm25 import BM25Plus
+from sentence_transformers import CrossEncoder
 try:
     from rapidfuzz import fuzz
 except ImportError:
@@ -30,6 +31,21 @@ except ImportError:
 from transformers import AutoTokenizer, AutoModel
 import sys
 from pathlib import Path
+
+# # Khởi tạo Cross-Encoder global
+
+# _cross_encoder = None
+
+# def get_bge_reranker():
+#     global _cross_encoder
+#     if _cross_encoder is None:
+#         print("[INFO] Loading BAAI/bge-reranker-v2-m3...")
+#         _cross_encoder = CrossEncoder(
+#             "BAAI/bge-reranker-v2-m3", 
+#             max_length=1024, # bge-v2-m3 hỗ trợ tối đa 8192, để 1024-2048 là dư xài cho OCR + Metadata
+#             device= "cpu"
+#         )
+#     return _cross_encoder
 
 def remove_vietnamese_diacritics(text: str) -> str:
     """Chuyển tiếng Việt có dấu thành không dấu và viết thường"""
@@ -668,158 +684,6 @@ def get_metadata_vector(metadata_index, vector_index):
 # HYBRID OCR SCORE (SEMANTIC E5 + ROBUST FUZZY LEXICAL MATCH)
 # ==========================================================
 
-def compute_ocr_scores(
-    query_emb,
-    candidate_list,
-    query_text="",
-    ocr_threshold=0.5,
-    batch_size=32
-):
-    print(
-        f"[INFO] Computing Hybrid OCR scores (Semantic E5 + Robust Fuzzy Match, threshold > {ocr_threshold})..."
-    )
-
-    if not candidate_list:
-        return candidate_list
-
-    query_emb = query_emb.reshape(1, -1)
-
-    # Chuẩn bị Query cho Fuzzy Matching (bỏ dấu và lọc ký tự đặc biệt)
-    clean_query = ""
-    q_tokens = []
-    if query_text:
-        norm_query = remove_vietnamese_diacritics(query_text)
-        clean_query = clean_ocr_text(norm_query)
-        q_tokens = [w for w in clean_query.split() if len(w) >= 2]
-
-    ocr_texts = []
-    ocr_candidate_ids = []
-    cand_clean_ocr_map = [[] for _ in candidate_list]
-
-    for cand_idx, cand in enumerate(candidate_list):
-        texts_info = cand.get("ocr_texts", [])
-        if not isinstance(texts_info, list):
-            texts_info = []
-
-        for item in texts_info:
-            # Hỗ trợ tương thích ngược: item có thể là dict {"text": ..., "score": ...} hoặc chuỗi
-            if isinstance(item, dict):
-                text = str(item.get("text", "")).strip()
-                score = float(item.get("score", 1.0))
-            elif isinstance(item, str):
-                text = str(item).strip()
-                score = 1.0
-            else:
-                continue
-
-            if not text:
-                continue
-
-            # LỌC THEO THRESHOLD: Chỉ đưa vào xử lý nếu score vượt ngưỡng
-            if score >= ocr_threshold:
-                ocr_texts.append(text)
-                ocr_candidate_ids.append(cand_idx)
-
-                # Lưu text sạch cho Fuzzy Matching
-                c_text = clean_ocr_text(remove_vietnamese_diacritics(text))
-                if c_text and len(c_text) >= 2:
-                    cand_clean_ocr_map[cand_idx].append(c_text)
-
-    # ------------------------------------------------------
-    # 1. TÍNH ĐIỂM NGỮ CẢNH BẰNG E5 (Semantic Similarity)
-    # ------------------------------------------------------
-    semantic_scores = [0.0] * len(candidate_list)
-
-    if ocr_texts:
-        ocr_embeddings = encode_e5(
-            ocr_texts,
-            prefix="passage",
-            batch_size=batch_size
-        )
-
-        similarities = (
-            ocr_embeddings @ query_emb.T
-        ).reshape(-1)
-
-        candidate_scores = [[] for _ in candidate_list]
-
-        for sim, cand_idx in zip(similarities, ocr_candidate_ids):
-            candidate_scores[cand_idx].append(float(sim))
-
-        for cand_idx in range(len(candidate_list)):
-            scores = candidate_scores[cand_idx]
-            if scores:
-                semantic_scores[cand_idx] = float(topk_average(scores, k=3))
-
-    # ------------------------------------------------------
-    # 2. TÍNH ĐIỂM SO KHỚP MỜ / TỪ KHÓA (Fuzzy & Exact Lexical Match)
-    # ------------------------------------------------------
-    for cand_idx, cand in enumerate(candidate_list):
-        s_semantic = semantic_scores[cand_idx]
-        s_fuzzy = 0.0
-        clean_ocr_list = cand_clean_ocr_map[cand_idx]
-
-        if clean_query and clean_ocr_list:
-            best_match_val = 0.0
-
-            for ocr_str in clean_ocr_list:
-                # partial_ratio: tìm query con trong đoạn OCR
-                p_ratio = fuzz.partial_ratio(clean_query, ocr_str)
-                # token_set_ratio: so khớp tập hợp từ chống sai thứ tự
-                t_ratio = fuzz.token_set_ratio(clean_query, ocr_str)
-
-                # Token exact hit bonus (cho chữ số, mã số, tên riêng)
-                token_hits = sum(1 for t in q_tokens if t in ocr_str)
-                token_bonus = (token_hits / len(q_tokens)) * 25.0 if q_tokens else 0.0
-
-                current_val = max(p_ratio, t_ratio) + token_bonus
-                if current_val > best_match_val:
-                    best_match_val = current_val
-
-            # Chuẩn hóa về [0.0, 1.0] nếu đạt ngưỡng tin cậy >= 60%
-            if best_match_val >= 60.0:
-                s_fuzzy = min(best_match_val / 100.0, 1.0)
-
-        # --------------------------------------------------
-        # 3. KẾT HỢP HYBRID (Semantic + Fuzzy Boost)
-        # --------------------------------------------------
-        # Nếu có từ khóa/số hiệu khớp mạnh (s_fuzzy >= 0.70):
-        # Ưu tiên lấy điểm cao nhất + bonus cộng hưởng
-        # Nếu không khớp từ khóa: Giữ nguyên 100% điểm E5 ngữ cảnh
-        if s_fuzzy >= 0.70:
-            final_ocr = min(1.0, max(s_semantic, s_fuzzy) + 0.10 * min(s_semantic, s_fuzzy))
-        elif s_fuzzy > 0.0:
-            final_ocr = max(s_semantic, 0.7 * s_semantic + 0.3 * s_fuzzy)
-        else:
-            final_ocr = s_semantic
-
-        cand["ocr_semantic_score"] = round(float(s_semantic), 4)
-        cand["ocr_fuzzy_score"] = round(float(s_fuzzy), 4)
-        cand["ocr_score"] = round(float(final_ocr), 4)
-
-    # ------------------------------------------------------
-    # DEBUG
-    # ------------------------------------------------------
-    non_zero = sum(
-        1
-        for cand in candidate_list
-        if cand["ocr_score"] != 0
-    )
-
-    scores = [
-        cand["ocr_score"]
-        for cand in candidate_list
-    ]
-
-    print("[DEBUG OCR]")
-    print(f"Candidates             : {len(candidate_list)}")
-    print(f"Candidates with OCR    : {non_zero}")
-    print(
-        f"Score range            : "
-        f"{min(scores):.4f} -> {max(scores):.4f}"
-    )
-
-    return candidate_list
 # def compute_ocr_scores(
 #     query_emb,
 #     candidate_list,
@@ -828,7 +692,7 @@ def compute_ocr_scores(
 #     batch_size=32
 # ):
 #     print(
-#         f"[INFO] Computing Pure Semantic OCR scores (E5, threshold > {ocr_threshold})..."
+#         f"[INFO] Computing Hybrid OCR scores (Semantic E5 + Robust Fuzzy Match, threshold > {ocr_threshold})..."
 #     )
 
 #     if not candidate_list:
@@ -836,8 +700,17 @@ def compute_ocr_scores(
 
 #     query_emb = query_emb.reshape(1, -1)
 
+#     # Chuẩn bị Query cho Fuzzy Matching (bỏ dấu và lọc ký tự đặc biệt)
+#     clean_query = ""
+#     q_tokens = []
+#     if query_text:
+#         norm_query = remove_vietnamese_diacritics(query_text)
+#         clean_query = clean_ocr_text(norm_query)
+#         q_tokens = [w for w in clean_query.split() if len(w) >= 2]
+
 #     ocr_texts = []
 #     ocr_candidate_ids = []
+#     cand_clean_ocr_map = [[] for _ in candidate_list]
 
 #     for cand_idx, cand in enumerate(candidate_list):
 #         texts_info = cand.get("ocr_texts", [])
@@ -863,8 +736,13 @@ def compute_ocr_scores(
 #                 ocr_texts.append(text)
 #                 ocr_candidate_ids.append(cand_idx)
 
+#                 # Lưu text sạch cho Fuzzy Matching
+#                 c_text = clean_ocr_text(remove_vietnamese_diacritics(text))
+#                 if c_text and len(c_text) >= 2:
+#                     cand_clean_ocr_map[cand_idx].append(c_text)
+
 #     # ------------------------------------------------------
-#     # TÍNH ĐIỂM NGỮ CẢNH BẰNG E5 (Semantic Similarity)
+#     # 1. TÍNH ĐIỂM NGỮ CẢNH BẰNG E5 (Semantic Similarity)
 #     # ------------------------------------------------------
 #     semantic_scores = [0.0] * len(candidate_list)
 
@@ -889,13 +767,51 @@ def compute_ocr_scores(
 #             if scores:
 #                 semantic_scores[cand_idx] = float(topk_average(scores, k=3))
 
-#     # Gán trực tiếp điểm semantic làm điểm OCR cuối cùng
+#     # ------------------------------------------------------
+#     # 2. TÍNH ĐIỂM SO KHỚP MỜ / TỪ KHÓA (Fuzzy & Exact Lexical Match)
+#     # ------------------------------------------------------
 #     for cand_idx, cand in enumerate(candidate_list):
 #         s_semantic = semantic_scores[cand_idx]
+#         s_fuzzy = 0.0
+#         clean_ocr_list = cand_clean_ocr_map[cand_idx]
+
+#         if clean_query and clean_ocr_list:
+#             best_match_val = 0.0
+
+#             for ocr_str in clean_ocr_list:
+#                 # partial_ratio: tìm query con trong đoạn OCR
+#                 p_ratio = fuzz.partial_ratio(clean_query, ocr_str)
+#                 # token_set_ratio: so khớp tập hợp từ chống sai thứ tự
+#                 t_ratio = fuzz.token_set_ratio(clean_query, ocr_str)
+
+#                 # Token exact hit bonus (cho chữ số, mã số, tên riêng)
+#                 token_hits = sum(1 for t in q_tokens if t in ocr_str)
+#                 token_bonus = (token_hits / len(q_tokens)) * 25.0 if q_tokens else 0.0
+
+#                 current_val = max(p_ratio, t_ratio) + token_bonus
+#                 if current_val > best_match_val:
+#                     best_match_val = current_val
+
+#             # Chuẩn hóa về [0.0, 1.0] nếu đạt ngưỡng tin cậy >= 60%
+#             if best_match_val >= 60.0:
+#                 s_fuzzy = min(best_match_val / 100.0, 1.0)
+
+#         # --------------------------------------------------
+#         # 3. KẾT HỢP HYBRID (Semantic + Fuzzy Boost)
+#         # --------------------------------------------------
+#         # Nếu có từ khóa/số hiệu khớp mạnh (s_fuzzy >= 0.70):
+#         # Ưu tiên lấy điểm cao nhất + bonus cộng hưởng
+#         # Nếu không khớp từ khóa: Giữ nguyên 100% điểm E5 ngữ cảnh
+#         if s_fuzzy >= 0.70:
+#             final_ocr = min(1.0, max(s_semantic, s_fuzzy) + 0.10 * min(s_semantic, s_fuzzy))
+#         elif s_fuzzy > 0.0:
+#             final_ocr = max(s_semantic, 0.7 * s_semantic + 0.3 * s_fuzzy)
+#         else:
+#             final_ocr = s_semantic
 
 #         cand["ocr_semantic_score"] = round(float(s_semantic), 4)
-#         cand["ocr_fuzzy_score"] = 0.0
-#         cand["ocr_score"] = round(float(s_semantic), 4)
+#         cand["ocr_fuzzy_score"] = round(float(s_fuzzy), 4)
+#         cand["ocr_score"] = round(float(final_ocr), 4)
 
 #     # ------------------------------------------------------
 #     # DEBUG
@@ -912,16 +828,168 @@ def compute_ocr_scores(
 #     ]
 
 #     print("[DEBUG OCR]")
-#     print(f"Candidates            : {len(candidate_list)}")
+#     print(f"Candidates             : {len(candidate_list)}")
 #     print(f"Candidates with OCR    : {non_zero}")
 #     print(
 #         f"Score range            : "
 #         f"{min(scores):.4f} -> {max(scores):.4f}"
-#         if scores else "Score range            : 0.0 -> 0.0"
 #     )
 
 #     return candidate_list
+def extract_char_ngrams(text: str, n: int = 3) -> list:
+    """Tách chuỗi thành các N-gram ký tự (Ví dụ: 'vinmart' -> [' vi', 'vin',
+    'inm', 'rma', 'art', 'rt '])"""
+    if not text:
+        return []
+    text = f" {text.strip()} "  # Thêm khoảng trắng đầu/cuối để bắt ranh giới từ
+    if len(text) < n:
+        return [text]
+    return [text[i : i + n] for i in range(len(text) - n + 1)]
 
+
+def compute_ocr_scores(
+    query_emb, candidate_list, query_text="", ocr_threshold=0.5, batch_size=32
+):
+    print(
+        f"[INFO] Computing Hybrid OCR scores (Semantic E5 + Char 3-Gram BM25+, threshold > {ocr_threshold})..."
+    )
+
+    if not candidate_list:
+        return candidate_list
+
+    query_emb = query_emb.reshape(1, -1)
+
+    # ------------------------------------------------------
+    # Chuẩn bị Query Char 3-Gram cho BM25+
+    # ------------------------------------------------------
+    clean_query = ""
+    q_ngrams = []
+    if query_text:
+        norm_query = remove_vietnamese_diacritics(query_text)
+        clean_query = clean_ocr_text(norm_query)
+        q_ngrams = extract_char_ngrams(clean_query, n=3)
+
+    ocr_texts = []
+    ocr_candidate_ids = []
+    cand_clean_ocr_map = [[] for _ in candidate_list]
+
+    for cand_idx, cand in enumerate(candidate_list):
+        texts_info = cand.get("ocr_texts", [])
+        if not isinstance(texts_info, list):
+            texts_info = []
+
+        for item in texts_info:
+            if isinstance(item, dict):
+                text = str(item.get("text", "")).strip()
+                score = float(item.get("score", 1.0))
+            elif isinstance(item, str):
+                text = str(item).strip()
+                score = 1.0
+            else:
+                continue
+
+            if not text:
+                continue
+
+            # LỌC THEO THRESHOLD
+            if score >= ocr_threshold:
+                ocr_texts.append(text)
+                ocr_candidate_ids.append(cand_idx)
+
+                # Lưu text sạch cho BM25
+                c_text = clean_ocr_text(remove_vietnamese_diacritics(text))
+                if c_text and len(c_text) >= 2:
+                    cand_clean_ocr_map[cand_idx].append(c_text)
+
+    # ------------------------------------------------------
+    # 1. TÍNH ĐIỂM NGỮ CẢNH BẰNG E5 (Semantic Similarity)
+    # ------------------------------------------------------
+    semantic_scores = [0.0] * len(candidate_list)
+
+    if ocr_texts:
+        ocr_embeddings = encode_e5(
+            ocr_texts, prefix="passage", batch_size=batch_size
+        )
+
+        similarities = (ocr_embeddings @ query_emb.T).reshape(-1)
+
+        candidate_scores = [[] for _ in candidate_list]
+
+        for sim, cand_idx in zip(similarities, ocr_candidate_ids):
+            candidate_scores[cand_idx].append(float(sim))
+
+        for cand_idx in range(len(candidate_list)):
+            scores = candidate_scores[cand_idx]
+            if scores:
+                semantic_scores[cand_idx] = float(topk_average(scores, k=3))
+
+    # ------------------------------------------------------
+    # 2. TÍNH ĐIỂM LEXICAL BẰNG CHAR 3-GRAM BM25+
+    # ------------------------------------------------------
+    bm25_scores = [0.0] * len(candidate_list)
+
+    if q_ngrams:
+        # Xây dựng corpus Char 3-gram cho từng Candidate
+        corpus_ngrams = []
+        for cand_idx in range(len(candidate_list)):
+            clean_ocr_list = cand_clean_ocr_map[cand_idx]
+            combined_ocr_text = " ".join(clean_ocr_list)
+            doc_ngrams = extract_char_ngrams(combined_ocr_text, n=3)
+            corpus_ngrams.append(doc_ngrams)
+
+        # Kiểm tra nếu ít nhất 1 candidate có văn bản OCR
+        if any(len(doc) > 0 for doc in corpus_ngrams):
+            # Đưa q_ngrams làm tài liệu tham chiếu ở vị trí 0 để lấy điểm max lý tưởng
+            full_corpus = [q_ngrams] + corpus_ngrams
+            bm25_model = BM25Plus(full_corpus, delta=1.0)
+
+            raw_scores = bm25_model.get_scores(q_ngrams)
+            max_possible_score = raw_scores[0]  # Self-match score
+
+            if max_possible_score > 0:
+                for cand_idx in range(len(candidate_list)):
+                    cand_raw_score = raw_scores[cand_idx + 1]
+                    # Chuẩn hóa điểm về khoảng [0.0, 1.0]
+                    norm_score = min(
+                        1.0, max(0.0, cand_raw_score / max_possible_score)
+                    )
+                    bm25_scores[cand_idx] = norm_score
+
+    # ------------------------------------------------------
+    # 3. KẾT HỢP HYBRID (Semantic + BM25+ Boost)
+    # ------------------------------------------------------
+    for cand_idx, cand in enumerate(candidate_list):
+        s_semantic = semantic_scores[cand_idx]
+        s_bm25 = bm25_scores[cand_idx]
+
+        # Nếu có từ khóa/chuỗi ký tự khớp mạnh (s_bm25 >= 0.50):
+        if s_bm25 >= 0.50:
+            final_ocr = min(
+                1.0, max(s_semantic, s_bm25) + 0.10 * min(s_semantic, s_bm25)
+            )
+        elif s_bm25 > 0.0:
+            final_ocr = max(s_semantic, 0.7 * s_semantic + 0.3 * s_bm25)
+        else:
+            final_ocr = s_semantic
+
+        cand["ocr_semantic_score"] = round(float(s_semantic), 4)
+        cand["ocr_bm25_score"] = round(float(s_bm25), 4)
+        cand["ocr_score"] = round(float(final_ocr), 4)
+
+    # ------------------------------------------------------
+    # DEBUG
+    # ------------------------------------------------------
+    non_zero = sum(1 for cand in candidate_list if cand["ocr_score"] != 0)
+    scores = [cand["ocr_score"] for cand in candidate_list]
+
+    print("[DEBUG OCR]")
+    print(f"Candidates             : {len(candidate_list)}")
+    print(f"Candidates with OCR    : {non_zero}")
+    print(
+        f"Score range            : {min(scores):.4f} -> {max(scores):.4f}"
+    )
+
+    return candidate_list
 # ==========================================================
 # METADATA SEMANTIC SCORE
 # USING PRECOMPUTED E5 METADATA INDEX
@@ -1024,14 +1092,152 @@ def compute_metadata_scores(
 # HYBRID ASR SCORE (SEMANTIC E5 + ROBUST FUZZY LEXICAL MATCH)
 # ==========================================================
 
+# def compute_asr_scores(
+#     query_emb,
+#     candidate_list,
+#     query_text="",
+#     batch_size=32
+# ):
+#     print(
+#         "[INFO] Computing Hybrid ASR scores (Semantic E5 + Robust Fuzzy Match)..."
+#     )
+
+#     if not candidate_list:
+#         return candidate_list
+
+#     query_emb = query_emb.reshape(1, -1)
+
+#     # Chuẩn bị Query cho Fuzzy Matching (bỏ dấu và lọc ký tự đặc biệt)
+#     clean_query = ""
+#     q_tokens = []
+#     if query_text:
+#         norm_query = remove_vietnamese_diacritics(query_text)
+#         clean_query = clean_ocr_text(norm_query)
+#         q_tokens = [w for w in clean_query.split() if len(w) >= 2]
+
+#     asr_texts = []
+#     asr_candidate_ids = []
+#     cand_clean_asr_map = [[] for _ in candidate_list]
+
+#     for cand_idx, cand in enumerate(candidate_list):
+#         text_val = cand.get("asr_text", "")
+
+#         if isinstance(text_val, list):
+#             texts = text_val
+#         elif isinstance(text_val, str) and text_val.strip():
+#             texts = [text_val]
+#         else:
+#             texts = []
+
+#         for text in texts:
+#             text = str(text).strip()
+#             if not text:
+#                 continue
+
+#             asr_texts.append(text)
+#             asr_candidate_ids.append(cand_idx)
+
+#             c_text = clean_ocr_text(remove_vietnamese_diacritics(text))
+#             if c_text and len(c_text) >= 2:
+#                 cand_clean_asr_map[cand_idx].append(c_text)
+
+#     # ------------------------------------------------------
+#     # 1. TÍNH ĐIỂM NGỮ CẢNH BẰNG E5 (Semantic Similarity)
+#     # ------------------------------------------------------
+#     semantic_scores = [0.0] * len(candidate_list)
+
+#     if asr_texts:
+#         asr_embeddings = encode_e5(
+#             asr_texts,
+#             prefix="passage",
+#             batch_size=batch_size
+#         )
+
+#         similarities = (
+#             asr_embeddings @ query_emb.T
+#         ).reshape(-1)
+
+#         candidate_semantic_scores = [[] for _ in candidate_list]
+
+#         for sim, cand_idx in zip(similarities, asr_candidate_ids):
+#             candidate_semantic_scores[cand_idx].append(float(sim))
+
+#         for cand_idx in range(len(candidate_list)):
+#             scores = candidate_semantic_scores[cand_idx]
+#             if scores:
+#                 semantic_scores[cand_idx] = float(max(scores))
+
+#     # ------------------------------------------------------
+#     # 2. TÍNH ĐIỂM SO KHỚP MỜ / TỪ KHÓA (Fuzzy & Exact Lexical Match)
+#     # ------------------------------------------------------
+#     for cand_idx, cand in enumerate(candidate_list):
+#         s_semantic = semantic_scores[cand_idx]
+#         s_fuzzy = 0.0
+#         clean_asr_list = cand_clean_asr_map[cand_idx]
+
+#         if clean_query and clean_asr_list:
+#             best_match_val = 0.0
+
+#             for asr_str in clean_asr_list:
+#                 # partial_ratio: tìm query con trong đoạn ASR
+#                 p_ratio = fuzz.partial_ratio(clean_query, asr_str)
+#                 # token_set_ratio: so khớp tập hợp từ khóa
+#                 t_ratio = fuzz.token_set_ratio(clean_query, asr_str)
+
+#                 # Token exact hit bonus
+#                 token_hits = sum(1 for t in q_tokens if t in asr_str)
+#                 token_bonus = (token_hits / len(q_tokens)) * 25.0 if q_tokens else 0.0
+
+#                 current_val = max(p_ratio, t_ratio) + token_bonus
+#                 if current_val > best_match_val:
+#                     best_match_val = current_val
+
+#             # Chuẩn hóa về [0.0, 1.0] nếu đạt ngưỡng tin cậy >= 60%
+#             if best_match_val >= 60.0:
+#                 s_fuzzy = min(best_match_val / 100.0, 1.0)
+
+#         # --------------------------------------------------
+#         # 3. KẾT HỢP HYBRID (Semantic + Fuzzy Boost)
+#         # --------------------------------------------------
+#         if s_fuzzy >= 0.70:
+#             final_asr = min(1.0, max(s_semantic, s_fuzzy) + 0.10 * min(s_semantic, s_fuzzy))
+#         elif s_fuzzy > 0.0:
+#             final_asr = max(s_semantic, 0.7 * s_semantic + 0.3 * s_fuzzy)
+#         else:
+#             final_asr = s_semantic
+
+#         cand["asr_semantic_score"] = round(float(s_semantic), 4)
+#         cand["asr_fuzzy_score"] = round(float(s_fuzzy), 4)
+#         cand["asr_score"] = round(float(final_asr), 4)
+
+#     # ------------------------------------------------------
+#     # DEBUG
+#     # ------------------------------------------------------
+#     non_zero = sum(
+#         1
+#         for cand in candidate_list
+#         if cand["asr_score"] != 0
+#     )
+
+#     scores = [
+#         cand["asr_score"]
+#         for cand in candidate_list
+#     ]
+
+#     print("[DEBUG ASR]")
+#     print(f"Candidates             : {len(candidate_list)}")
+#     print(f"Candidates with ASR    : {non_zero}")
+#     print(
+#         f"Score range            : "
+#         f"{min(scores):.4f} -> {max(scores):.4f}"
+#     )
+
+#     return candidate_list
 def compute_asr_scores(
-    query_emb,
-    candidate_list,
-    query_text="",
-    batch_size=32
+    query_emb, candidate_list, query_text="", batch_size=32
 ):
     print(
-        "[INFO] Computing Hybrid ASR scores (Semantic E5 + Robust Fuzzy Match)..."
+        "[INFO] Computing Hybrid ASR scores (Semantic E5 + Word-Level BM25+)..."
     )
 
     if not candidate_list:
@@ -1039,7 +1245,9 @@ def compute_asr_scores(
 
     query_emb = query_emb.reshape(1, -1)
 
-    # Chuẩn bị Query cho Fuzzy Matching (bỏ dấu và lọc ký tự đặc biệt)
+    # ------------------------------------------------------
+    # Chuẩn bị Query Word Tokens cho BM25+
+    # ------------------------------------------------------
     clean_query = ""
     q_tokens = []
     if query_text:
@@ -1080,14 +1288,10 @@ def compute_asr_scores(
 
     if asr_texts:
         asr_embeddings = encode_e5(
-            asr_texts,
-            prefix="passage",
-            batch_size=batch_size
+            asr_texts, prefix="passage", batch_size=batch_size
         )
 
-        similarities = (
-            asr_embeddings @ query_emb.T
-        ).reshape(-1)
+        similarities = (asr_embeddings @ query_emb.T).reshape(-1)
 
         candidate_semantic_scores = [[] for _ in candidate_list]
 
@@ -1100,165 +1304,74 @@ def compute_asr_scores(
                 semantic_scores[cand_idx] = float(max(scores))
 
     # ------------------------------------------------------
-    # 2. TÍNH ĐIỂM SO KHỚP MỜ / TỪ KHÓA (Fuzzy & Exact Lexical Match)
+    # 2. TÍNH ĐIỂM TỪ KHÓA BẰNG WORD-LEVEL BM25+
+    # ------------------------------------------------------
+    bm25_scores = [0.0] * len(candidate_list)
+
+    if q_tokens:
+        # Tách Word Tokens cho từng Candidate ASR
+        corpus_tokens = []
+        for cand_idx in range(len(candidate_list)):
+            clean_asr_list = cand_clean_asr_map[cand_idx]
+            combined_asr_text = " ".join(clean_asr_list)
+            doc_tokens = [
+                w for w in combined_asr_text.split() if len(w) >= 2
+            ]
+            corpus_tokens.append(doc_tokens)
+
+        # Đưa q_tokens vào đầu full_corpus làm tài liệu chuẩn (Self-match reference)
+        if any(len(doc) > 0 for doc in corpus_tokens):
+            full_corpus = [q_tokens] + corpus_tokens
+            bm25_model = BM25Plus(full_corpus, delta=1.0)
+
+            raw_scores = bm25_model.get_scores(q_tokens)
+            max_possible_score = raw_scores[0]
+
+            if max_possible_score > 0:
+                for cand_idx in range(len(candidate_list)):
+                    cand_raw_score = raw_scores[cand_idx + 1]
+                    # Chuẩn hóa về thang [0.0, 1.0]
+                    norm_score = min(
+                        1.0, max(0.0, cand_raw_score / max_possible_score)
+                    )
+                    bm25_scores[cand_idx] = norm_score
+
+    # ------------------------------------------------------
+    # 3. KẾT HỢP HYBRID (Semantic + BM25 Boost)
     # ------------------------------------------------------
     for cand_idx, cand in enumerate(candidate_list):
         s_semantic = semantic_scores[cand_idx]
-        s_fuzzy = 0.0
-        clean_asr_list = cand_clean_asr_map[cand_idx]
+        s_bm25 = bm25_scores[cand_idx]
 
-        if clean_query and clean_asr_list:
-            best_match_val = 0.0
-
-            for asr_str in clean_asr_list:
-                # partial_ratio: tìm query con trong đoạn ASR
-                p_ratio = fuzz.partial_ratio(clean_query, asr_str)
-                # token_set_ratio: so khớp tập hợp từ khóa
-                t_ratio = fuzz.token_set_ratio(clean_query, asr_str)
-
-                # Token exact hit bonus
-                token_hits = sum(1 for t in q_tokens if t in asr_str)
-                token_bonus = (token_hits / len(q_tokens)) * 25.0 if q_tokens else 0.0
-
-                current_val = max(p_ratio, t_ratio) + token_bonus
-                if current_val > best_match_val:
-                    best_match_val = current_val
-
-            # Chuẩn hóa về [0.0, 1.0] nếu đạt ngưỡng tin cậy >= 60%
-            if best_match_val >= 60.0:
-                s_fuzzy = min(best_match_val / 100.0, 1.0)
-
-        # --------------------------------------------------
-        # 3. KẾT HỢP HYBRID (Semantic + Fuzzy Boost)
-        # --------------------------------------------------
-        if s_fuzzy >= 0.70:
-            final_asr = min(1.0, max(s_semantic, s_fuzzy) + 0.10 * min(s_semantic, s_fuzzy))
-        elif s_fuzzy > 0.0:
-            final_asr = max(s_semantic, 0.7 * s_semantic + 0.3 * s_fuzzy)
+        # Nếu có từ khóa trùng khớp mạnh (s_bm25 >= 0.40)
+        if s_bm25 >= 0.40:
+            final_asr = min(
+                1.0, max(s_semantic, s_bm25) + 0.10 * min(s_semantic, s_bm25)
+            )
+        elif s_bm25 > 0.0:
+            final_asr = max(s_semantic, 0.7 * s_semantic + 0.3 * s_bm25)
         else:
             final_asr = s_semantic
 
         cand["asr_semantic_score"] = round(float(s_semantic), 4)
-        cand["asr_fuzzy_score"] = round(float(s_fuzzy), 4)
+        cand["asr_bm25_score"] = round(float(s_bm25), 4)
         cand["asr_score"] = round(float(final_asr), 4)
 
     # ------------------------------------------------------
     # DEBUG
     # ------------------------------------------------------
-    non_zero = sum(
-        1
-        for cand in candidate_list
-        if cand["asr_score"] != 0
-    )
-
-    scores = [
-        cand["asr_score"]
-        for cand in candidate_list
-    ]
+    non_zero = sum(1 for cand in candidate_list if cand["asr_score"] != 0)
+    scores = [cand["asr_score"] for cand in candidate_list]
 
     print("[DEBUG ASR]")
     print(f"Candidates             : {len(candidate_list)}")
     print(f"Candidates with ASR    : {non_zero}")
     print(
-        f"Score range            : "
-        f"{min(scores):.4f} -> {max(scores):.4f}"
+        f"Score range            : {min(scores):.4f} -> {max(scores):.4f}"
     )
 
     return candidate_list
-# def compute_asr_scores(
-#     query_emb,
-#     candidate_list,
-#     query_text="",
-#     batch_size=32
-# ):
-#     print(
-#         "[INFO] Computing Pure Semantic ASR scores (E5)..."
-#     )
 
-#     if not candidate_list:
-#         return candidate_list
-
-#     query_emb = query_emb.reshape(1, -1)
-
-#     asr_texts = []
-#     asr_candidate_ids = []
-
-#     for cand_idx, cand in enumerate(candidate_list):
-#         text_val = cand.get("asr_text", "")
-
-#         if isinstance(text_val, list):
-#             texts = text_val
-#         elif isinstance(text_val, str) and text_val.strip():
-#             texts = [text_val]
-#         else:
-#             texts = []
-
-#         for text in texts:
-#             text = str(text).strip()
-#             if not text:
-#                 continue
-
-#             asr_texts.append(text)
-#             asr_candidate_ids.append(cand_idx)
-
-#     # ------------------------------------------------------
-#     # TÍNH ĐIỂM NGỮ CẢNH BẰNG E5 (Semantic Similarity)
-#     # ------------------------------------------------------
-#     semantic_scores = [0.0] * len(candidate_list)
-
-#     if asr_texts:
-#         asr_embeddings = encode_e5(
-#             asr_texts,
-#             prefix="passage",
-#             batch_size=batch_size
-#         )
-
-#         similarities = (
-#             asr_embeddings @ query_emb.T
-#         ).reshape(-1)
-
-#         candidate_semantic_scores = [[] for _ in candidate_list]
-
-#         for sim, cand_idx in zip(similarities, asr_candidate_ids):
-#             candidate_semantic_scores[cand_idx].append(float(sim))
-
-#         for cand_idx in range(len(candidate_list)):
-#             scores = candidate_semantic_scores[cand_idx]
-#             if scores:
-#                 semantic_scores[cand_idx] = float(max(scores))
-
-#     # Gán trực tiếp điểm semantic làm điểm ASR cuối cùng
-#     for cand_idx, cand in enumerate(candidate_list):
-#         s_semantic = semantic_scores[cand_idx]
-
-#         cand["asr_semantic_score"] = round(float(s_semantic), 4)
-#         cand["asr_fuzzy_score"] = 0.0
-#         cand["asr_score"] = round(float(s_semantic), 4)
-
-#     # ------------------------------------------------------
-#     # DEBUG
-#     # ------------------------------------------------------
-#     non_zero = sum(
-#         1
-#         for cand in candidate_list
-#         if cand["asr_score"] != 0
-#     )
-
-#     scores = [
-#         cand["asr_score"]
-#         for cand in candidate_list
-#     ]
-
-#     print("[DEBUG ASR]")
-#     print(f"Candidates            : {len(candidate_list)}")
-#     print(f"Candidates with ASR    : {non_zero}")
-#     print(
-#         f"Score range            : "
-#         f"{min(scores):.4f} -> {max(scores):.4f}"
-#         if scores else "Score range            : 0.0 -> 0.0"
-#     )
-
-#     return candidate_list
 # ==========================================================
 # RETRIEVAL SCORE NORMALIZATION
 # ==========================================================
@@ -1536,6 +1649,87 @@ def compute_video_narrative_bonus(candidate_list, query_text):
     return candidate_list
 
 
+# def build_doc_from_candidate(cand, max_ocr_words=25, max_asr_words=25, max_desc_words=35):
+#     doc_parts = []
+    
+#     # 1. Metadata (Title + Description)
+#     metadata = cand.get('metadata', {})
+#     title = str(metadata.get('title', '')).strip()
+#     if title: 
+#         doc_parts.append(f"Title: {title}")
+        
+#     description = str(metadata.get('description', '')).strip()
+#     if description:
+#         clean_desc = ' '.join(description.split()[:max_desc_words])
+#         doc_parts.append(f"Description: {clean_desc}")
+    
+#     # 2. OCR (Siết gọn 10-15 từ, chỉ lấy text có confidence >= 0.5)
+#     ocr_texts = []
+#     for item in cand.get('ocr_texts', []):
+#         text = ""
+#         if isinstance(item, dict) and item.get('score', 1.0) >= 0.5:
+#             text = str(item.get('text', '')).strip()
+#         elif isinstance(item, str):
+#             text = item.strip()
+            
+#         if len(text) >= 2:  # Bỏ qua từ rác 1 ký tự
+#             ocr_texts.append(text)
+            
+#     clean_ocr = ' '.join(' '.join(ocr_texts).split()[:max_ocr_words])
+#     if clean_ocr: 
+#         doc_parts.append(f"OCR: {clean_ocr}")
+    
+#     # 3. ASR (Siết gọn 20-25 từ)
+#     asr_val = cand.get('asr_text', '')
+#     if isinstance(asr_val, list):
+#         asr_str = ' '.join([str(x).strip() for x in asr_val if str(x).strip()])
+#     else:
+#         asr_str = str(asr_val).strip()
+    
+#     clean_asr = ' '.join(asr_str.split()[:max_asr_words])
+#     if clean_asr: 
+#         doc_parts.append(f"ASR: {clean_asr}")
+        
+#     # 4. Objects (Tối đa 8 thực thể)
+#     objects = cand.get('object_entities', [])
+#     if objects:
+#         clean_objs = ', '.join([str(o) for o in objects[:8]])
+#         doc_parts.append(f"Objects: {clean_objs}")
+    
+#     doc_text = " | ".join(doc_parts)
+#     return doc_text if doc_text else "video frame visual content"
+
+
+# def rerank_with_bge_m3(query_text, candidate_list, top_n=30, alpha=0.75):
+#     """
+#     top_n=50: Mở rộng diện rerank để cứu các candidate tụt ở Stage 1 (như Q36 rank 89 -> top).
+#     alpha=0.75: Giữ 75% Visual core + 25% BGE score (tính trực tiếp, không min-max).
+#     """
+#     if not candidate_list or top_n <= 0:
+#         return candidate_list
+
+#     to_rerank = candidate_list[:top_n]
+#     rest = candidate_list[top_n:]
+
+#     # Tạo cặp query-doc
+#     pairs = [[query_text, build_doc_from_candidate(cand)] for cand in to_rerank]
+
+#     model = get_bge_reranker()
+#     raw_logits = model.predict(pairs, batch_size=32, show_progress_bar=False)
+    
+#     # Sigmoid ép logit về [0, 1]
+#     sigmoid_scores = 1.0 / (1.0 + np.exp(-raw_logits))
+
+#     # Đổi điểm trực tiếp không qua scaling
+#     for i, cand in enumerate(to_rerank):
+#         ce_score = float(sigmoid_scores[i])
+#         stage1_score = cand['final_score']
+        
+#         cand['ce_score'] = ce_score
+#         cand['final_score'] = float(alpha * stage1_score + (1.0 - alpha) * ce_score)
+
+#     return sorted(to_rerank + rest, key=lambda x: x['final_score'], reverse=True)
+
 def weighted_score_fusion(
     candidate_list,
     query_text=None,
@@ -1669,6 +1863,11 @@ def weighted_score_fusion(
         key=lambda x: x["final_score"],
         reverse=True
     )
+
+
+
+
+
 # ==========================================================
 # RERANKING PIPELINE
 # ==========================================================
@@ -1749,6 +1948,11 @@ def reranking_pipeline(
         weights=cfg.get("weights")
     )   
     print_ram("After Fusion")
+    
+    # Rerank với Cross-Encoder
+    # candidate_list = rerank_with_bge_m3(query_text, candidate_list, top_n=50)
+    # print_ram("After Cross-Encoder")
+
     # Đóng gói chuẩn xác lại danh sách kết quả trả về cho hệ thống (UI/Streamlit)
     results = []
 

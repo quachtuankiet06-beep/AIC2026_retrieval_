@@ -14,28 +14,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 import time
 import gc
+import random
 
-# # Cache cho NLLB-200 để không phải load đi load lại nặng VRAM
-# _NLLB_CACHE = {"model": None, "tokenizer": None}
-# def get_nllib_translator(device="cpu"):
-#     """
-#     Load NLLB-200 chạy hoàn toàn trên CPU để tiết kiệm VRAM cho các model Vision.
-#     """
-#     if _NLLB_CACHE["model"] is None:
-#         model_name = "facebook/nllb-200-distilled-1.3B"
-#         print(f"[INFO] Loading Fallback Local Translator ({model_name}) on CPU...")
-#         tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-#         # Force load model sang CPU với float32
-#         model = AutoModelForSeq2SeqLM.from_pretrained(
-#             model_name,
-#             torch_dtype=torch.float32
-#         ).to(device)
-#         model.eval()
-        
-#         _NLLB_CACHE["tokenizer"] = tokenizer
-#         _NLLB_CACHE["model"] = model
-#     return _NLLB_CACHE["tokenizer"], _NLLB_CACHE["model"]
 def translate_with_qwen(query_text, device="cpu"):
     """
     Load Qwen2.5-1.5B-Instruct trên CPU, dịch thuật ngữ cảnh và giải phóng RAM ngay lập tức.
@@ -246,41 +226,73 @@ def decompose_standard_narrative_query(query_text):
 #         print(f"[WARNING] NLLB-200 Fallback cũng thất bại ({e}).")
 #     print(f"[WARNING] Giữ nguyên query gốc: '{query_text}'")
 #     return query_text
-
+MAX_RETRY = 1
 def expand_and_translate_query(query_text):
-    """
-    Chiến thuật Fallback Translator 3 tầng:
-    Tầng 1: Google Translate (Chủ đạo)
-    Tầng 2: Qwen2.5-1.5B-Instruct (Local Offline trên CPU)
-    Tầng 3: Giữ nguyên query gốc
-    """
+
     if not query_text or not query_text.strip():
         return query_text
 
-    # --- TẦNG 1: Thử Google Translate trước ---
-    try:
-        translator = GoogleTranslator(source='vi', target='en')
-        translated = translator.translate(query_text)
-        
-        if translated and translated.strip():
-            print(f"[INFO] Google Translate Success: '{query_text}' -> '{translated}'")
-            time.sleep(2)  # Nghỉ nhẹ chống spam rate limit
-            return translated
-    except Exception as e:
-        print(f"[WARNING] Google Translate thất bại ({e}), chuyển sang Local Fallback...")
+    # ======================================================
+    # TẦNG 1: GOOGLE TRANSLATE (Retry)
+    # ======================================================
 
-    # --- TẦNG 2: Fallback sang Qwen2.5-1.5B-Instruct ---
-    try:
-        translated = translate_with_qwen(query_text, device="cpu")
-        if translated and translated.strip():
-            print(f"[INFO] Qwen2.5-1.5B Fallback Success: '{query_text}' -> '{translated}'")
-            return translated
-            
-    except Exception as e:
-        print(f"[WARNING] Qwen2.5-1.5B Fallback cũng thất bại ({e}).")
+    # translator = GoogleTranslator(source="vi", target="en")
 
-    # --- TẦNG 3: Giữ nguyên query gốc ---
-    print(f"[WARNING] Giữ nguyên query gốc: '{query_text}'")
+    # for attempt in range(MAX_RETRY):
+
+    #     try:
+
+    #         translated = translator.translate(query_text)
+
+    #         if translated and translated.strip():
+
+    #             print(
+    #                 f"[INFO] Google Translate Success "
+    #                 f"(attempt {attempt+1}/{MAX_RETRY})"
+    #             )
+
+    #             return translated
+
+    #     except Exception as e:
+
+    #         print(
+    #             f"[WARNING] Google Translate failed "
+    #             f"(attempt {attempt+1}/{MAX_RETRY}): {e}"
+    #         )
+
+    #         # exponential backoff
+    #         wait_time = 2 ** attempt + random.uniform(0, 1)
+    #         time.sleep(wait_time)
+
+    # print("[WARNING] Google Translate thất bại hoàn toàn, chuyển sang Qwen...")
+
+    # ======================================================
+    # TẦNG 2: QWEN
+    # ======================================================
+
+    try:
+
+        translated = translate_with_qwen(
+            query_text,
+            device="cpu"
+        )
+
+        if translated and translated.strip():
+
+            print("[INFO] Qwen Fallback Success")
+
+            return translated
+
+    except Exception as e:
+
+        print(f"[WARNING] Qwen cũng lỗi: {e}")
+
+    # ======================================================
+    # TẦNG 3: ORIGINAL
+    # ======================================================
+
+    print("[WARNING] Sử dụng query gốc.")
+
     return query_text
 
 def load_config(config_path):
@@ -333,10 +345,10 @@ def siglip2_retrieval_pipeline(query_text, index_path, config_path):
 
     # Gộp trọng số nếu có Sub-query: 50% Anchor chính, 35% Full query, 15% Context phụ
     if len(embeddings_list) == 3:
-        combined_tf = 0.35 * embeddings_list[0] + 0.50 * embeddings_list[1] + 0.15 * embeddings_list[2]
+        combined_tf = 0.60 * embeddings_list[0] + 0.20 * embeddings_list[1] + 0.20 * embeddings_list[2]
         combined_tf = F.normalize(combined_tf, p=2, dim=1)
     elif len(embeddings_list) == 2:
-        combined_tf = 0.40 * embeddings_list[0] + 0.60 * embeddings_list[1]
+        combined_tf = 0.70 * embeddings_list[0] + 0.30 * embeddings_list[1]
         combined_tf = F.normalize(combined_tf, p=2, dim=1)
     else:
         combined_tf = embeddings_list[0]

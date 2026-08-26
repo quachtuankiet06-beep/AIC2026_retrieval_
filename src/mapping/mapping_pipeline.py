@@ -1,30 +1,6 @@
-import json
 from pathlib import Path
 
-
-# ==========================================================
-# Load Mapping Database
-# ==========================================================
-
-_MAPPING_CACHE = {}
-
-def load_mapping_database(mapping_path):
-    mapping_path = str(Path(mapping_path).resolve())
-
-    if mapping_path in _MAPPING_CACHE:
-        return _MAPPING_CACHE[mapping_path]
-
-    with open(mapping_path, "r", encoding="utf-8") as f:
-        mapping_list = json.load(f)
-
-    mapping_dict = {
-        item["vector_index"]: item
-        for item in mapping_list
-    }
-
-    _MAPPING_CACHE[mapping_path] = mapping_dict
-
-    return mapping_dict
+from src.utils.sqlite_keyframe_db import get_keyframe_database
 
 
 # ==========================================================
@@ -33,7 +9,7 @@ def load_mapping_database(mapping_path):
 
 def mapping_pipeline(
     retrieval_results,
-    mapping_path,
+    mapping_db_path,
 ):
     """
     Parameters
@@ -65,11 +41,35 @@ def mapping_pipeline(
     ]
     """
 
-    if len(retrieval_results) == 0:
+    if not retrieval_results:
         print("[INFO] Empty retrieval results.")
         return []
 
-    mapping_db = load_mapping_database(mapping_path)
+    ##########################################################
+    # Open SQLite database
+    ##########################################################
+
+    mapping_db = get_keyframe_database(
+        mapping_db_path
+    )
+
+    ##########################################################
+    # Batch lookup
+    ##########################################################
+
+    vector_indices = [
+
+        item["vector_index"]
+
+        for item in retrieval_results
+
+    ]
+
+    mapping_records = mapping_db.get_batch(
+        vector_indices
+    )
+
+    ##########################################################
 
     candidate_list = []
 
@@ -79,49 +79,120 @@ def mapping_pipeline(
 
         vector_index = item["vector_index"]
 
-        if vector_index not in mapping_db:
+        mapping_record = mapping_records.get(
+            vector_index
+        )
+
+        if mapping_record is None:
+
             missing += 1
+
             continue
 
-        mapping_record = mapping_db[vector_index]
-        ##################################################################
-        # Chuẩn hóa lại ocr_texts để đảm bảo đồng bộ định dạng với reranking_pipeline
-        raw_ocr = mapping_record.get("ocr_texts", [])
+        ######################################################
+        # Normalize OCR format
+        ######################################################
+
+        raw_ocr = mapping_record.get(
+            "ocr_texts",
+            []
+        )
+
         normalized_ocr = []
-        
+
         for ocr_item in raw_ocr:
-            if isinstance(ocr_item, dict):
-                # Đã chuẩn dạng mới {"text": ..., "score": ...}
-                normalized_ocr.append({
-                    "text": str(ocr_item.get("text", "")).strip().lower(),
-                    "score": float(ocr_item.get("score", 1.0))
-                })
-            elif isinstance(ocr_item, str):
-                # Hỗ trợ tương thích ngược nếu record cũ còn lưu dạng string thô
-                text_val = str(ocr_item).strip().lower()
+
+            if isinstance(
+                ocr_item,
+                dict
+            ):
+
+                normalized_ocr.append(
+
+                    {
+
+                        "text":
+                        str(
+                            ocr_item.get(
+                                "text",
+                                ""
+                            )
+                        ).strip().lower(),
+
+                        "score":
+                        float(
+                            ocr_item.get(
+                                "score",
+                                1.0
+                            )
+                        )
+
+                    }
+
+                )
+
+            elif isinstance(
+                ocr_item,
+                str
+            ):
+
+                text_val = str(
+                    ocr_item
+                ).strip().lower()
+
                 if text_val:
-                    normalized_ocr.append({
-                        "text": text_val,
-                        "score": 1.0
-                    })
-        #################################################################
+
+                    normalized_ocr.append(
+
+                        {
+
+                            "text":
+                            text_val,
+
+                            "score":
+                            1.0
+
+                        }
+
+                    )
+
+        mapping_record["ocr_texts"] = normalized_ocr
+
+        ######################################################
+
         candidate = {
 
-            # Retrieval information
-            "rank": item.get("rank", 1),
-            "vector_index": vector_index,
-            "score": item["score"],
+            "rank":
+            item.get(
+                "rank",
+                1
+            ),
 
-            # Mapping information
+            "vector_index":
+            vector_index,
+
+            "score":
+            item["score"],
+
             **mapping_record
+
         }
 
-        candidate_list.append(candidate)
+        candidate_list.append(
+            candidate
+        )
+
+    ##########################################################
 
     if missing > 0:
-        print(f"[WARNING] Missing {missing} vector indices.")
 
-    print(f"[INFO] Generated {len(candidate_list)} candidates.")
+        print(
+            f"[WARNING] Missing {missing} vector indices."
+        )
+
+    print(
+        f"[INFO] Generated {len(candidate_list)} candidates."
+    )
 
     return candidate_list
 
@@ -132,49 +203,64 @@ def mapping_pipeline(
 
 if __name__ == "__main__":
 
-    BASE_DIR = Path(__file__).resolve().parent.parent.parent
+    BASE_DIR = Path(__file__).resolve().parents[2]
 
-    MAPPING_PATH = (
-        BASE_DIR /
-        "data" /
-        "indexes" /
-        "keyframes_mapping_siglib2.json"
+    DB_PATH = (
+        BASE_DIR
+        / "data"
+        / "indexes"
+        / "keyframes.db"
     )
 
     fake_retrieval = [
 
         {
+
             "rank": 1,
-            "vector_index": 0,
+
+            "vector_index": 40,
+
             "score": 0.97
+
         },
 
         {
+
             "rank": 2,
-            "vector_index": 25,
+
+            "vector_index": 41,
+
             "score": 0.95
+
         },
 
         {
+
             "rank": 3,
-            "vector_index": 80,
+
+            "vector_index": 42,
+
             "score": 0.94
+
         }
 
     ]
 
     candidates = mapping_pipeline(
+
         retrieval_results=fake_retrieval,
-        mapping_path=str(MAPPING_PATH)
+
+        mapping_db_path=DB_PATH
+
     )
 
-    print("\n")
+    print()
 
     print("=" * 70)
-    print("TOP 3 CANDIDATES")
+    print("TOP CANDIDATES")
     print("=" * 70)
 
-    for candidate in candidates[:3]:
+    for candidate in candidates:
 
         print(f"Rank            : {candidate['rank']}")
         print(f"Score           : {candidate['score']:.4f}")
@@ -185,4 +271,3 @@ if __name__ == "__main__":
         print(f"Image           : {candidate['keyframe_path']}")
         print(f"Objects         : {candidate['object_entities'][:5]}")
         print("-" * 70)
-

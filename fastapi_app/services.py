@@ -21,7 +21,7 @@ from src.retrieval.temporal_retrieval_multi_model import temporal_retrieval_mult
 
 # Cấu hình đường dẫn mặc định
 BASE_DIR = ROOT_DIR
-MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_mapping.json"
+MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes.db"
 RETRIEVAL_CONFIG = BASE_DIR / "configs" / "retrieval.yaml"
 RERANK_CONFIG = BASE_DIR / "configs" / "reranking.yaml"
 VIDEO_FPS_MAPPING_PATH = BASE_DIR / "data" / "mapping" / "video_fps_mapping.json"
@@ -205,7 +205,7 @@ def execute_search(
             for step_cand in seq_path:
                 mapped_step_list = mapping_pipeline(
                     retrieval_results=[step_cand],
-                    mapping_path=mapping_p,
+                    mapping_db_path=mapping_p,
                 )
                 if mapped_step_list:
                     mapped_seq_path.append(mapped_step_list[0])
@@ -261,7 +261,7 @@ def execute_search(
 
         candidate_list = mapping_pipeline(
             retrieval_results=retrieval_results,
-            mapping_path=mapping_p,
+            mapping_db_path=mapping_p,
         )
 
         final_results = reranking_pipeline(
