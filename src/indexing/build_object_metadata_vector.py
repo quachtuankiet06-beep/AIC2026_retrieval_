@@ -164,7 +164,7 @@ model = AutoModel.from_pretrained(model_name).to(device)
 model.eval()
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_mapping.json"
+MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_mapping_new.json"
 
 def average_pool(last_hidden_state, attention_mask):
     last_hidden = last_hidden_state.masked_fill(

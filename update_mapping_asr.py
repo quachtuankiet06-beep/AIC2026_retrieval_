@@ -3,7 +3,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 # Cấu hình đường dẫn trên local
-KEYFRAMES_MAPPING_PATH = Path(r"D:\tai_lieu_hoc_tap\AIC_2026\data\indexes\keyframes_mapping.json")
+KEYFRAMES_MAPPING_PATH = Path(r"D:\tai_lieu_hoc_tap\AIC_2026\data\indexes\keyframes_mapping_new.json")
 ASR_MAPPING_PATH = Path(r"D:\tai_lieu_hoc_tap\AIC_2026\data\indexes\asr_mapping.json")
 
 def main():

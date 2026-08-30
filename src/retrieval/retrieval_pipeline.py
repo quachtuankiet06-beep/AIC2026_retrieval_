@@ -10,12 +10,13 @@ from deep_translator import GoogleTranslator
 import faiss
 import clip  # Thư viện openai-clip cho ViT-B/32
 import open_clip
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, T5Tokenizer
 import torch
 import time
 import gc
 import random
-
+from huggingface_hub import hf_hub_download
+import sentencepiece as spm
 def translate_with_qwen(query_text, device="cpu"):
     """
     Load Qwen2.5-1.5B-Instruct trên CPU, dịch thuật ngữ cảnh và giải phóng RAM ngay lập tức.
@@ -76,6 +77,79 @@ def translate_with_qwen(query_text, device="cpu"):
 
     return translated
 
+# bộ dịch envit5
+# Biến toàn cục lưu giữ Instance của EnViT5 cố định trong RAM
+_ENVIT5_MODEL = None
+_ENVIT5_TOKENIZER = None
+def get_envit5_translator(device: str = "cpu"):
+    global _ENVIT5_MODEL, _ENVIT5_SPM
+
+    if _ENVIT5_MODEL is None or _ENVIT5_SPM is None:
+        model_name = "VietAI/envit5-translation"
+        print(
+            f"[INFO] Loading {model_name} into memory on {device} (One-time load)..."
+        )
+
+        # 1. Tải file spiece.model từ Hub
+        spm_path = hf_hub_download(repo_id=model_name, filename="spiece.model")
+
+        # 2. Dùng trực tiếp SentencePieceProcessor chuẩn của Google (Không thông qua transformers tokenizer)
+        _ENVIT5_SPM = spm.SentencePieceProcessor()
+        _ENVIT5_SPM.load(spm_path)
+
+        # 3. Nạp Model EnViT5
+        _ENVIT5_MODEL = AutoModelForSeq2SeqLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float32 if device == "cpu" else torch.float16,
+        ).to(device)
+        _ENVIT5_MODEL.eval()
+
+        print("[SUCCESS] VietAI EnViT5 loaded into RAM successfully!")
+
+    return _ENVIT5_MODEL, _ENVIT5_SPM
+
+
+def translate_with_envit5(query_text: str, device: str = "cpu") -> str:
+    """
+    Hàm dịch tối ưu cho EnViT5 với Beam Search nhẹ và quản lý thiết bị tốt hơn.
+    """
+    if not query_text or not query_text.strip():
+        return ""
+
+    model, sp = get_envit5_translator(device=device)
+
+    # Đảm bảo model đã nằm đúng device
+    model.to(device)
+    model.eval()
+
+    # Chuẩn hóa input format của EnViT5
+    input_text = f"vi: {query_text.strip()}"
+
+    # Mã hóa trực tiếp bằng SentencePiece
+    input_ids = sp.encode(input_text) + [1] # Thêm EOS token (ID 1)
+    input_tensor = torch.tensor([input_ids], dtype=torch.long).to(device)
+
+    with torch.no_grad():
+        outputs = model.generate(
+            input_ids=input_tensor,
+            max_new_tokens=128,        # Dùng max_new_tokens thay vì max_length để tránh bị cắt cụt câu dài
+            num_beams=4,               # Tăng num_beams lên 4 để cải thiện chất lượng dịch (giảm lủng củng)
+            early_stopping=True,       # Dừng sớm khi gặp token kết thúc beam search
+            do_sample=False,
+            decoder_start_token_id=0,  # Token bắt đầu giải mã của EnViT5
+            eos_token_id=1,
+            pad_token_id=0,
+        )
+
+    # Giải mã ID token ra chuỗi văn bản
+    output_ids = outputs[0].tolist()
+    translated = sp.decode(output_ids).strip()
+
+    # Loại bỏ tiền tố "en:" hoặc các biến thể khoảng trắng bằng Regex cho triệt để
+    translated = re.sub(r'^(en\s*:\s*)', '', translated, flags=re.IGNORECASE).strip()
+
+    return translated
+    
 _SIGLIP2_CACHE = {
     "processor": None,
     "model": None
@@ -267,25 +341,26 @@ def expand_and_translate_query(query_text):
     # print("[WARNING] Google Translate thất bại hoàn toàn, chuyển sang Qwen...")
 
     # ======================================================
-    # TẦNG 2: QWEN
+    # TẦNG 2: envit5
     # ======================================================
 
     try:
 
-        translated = translate_with_qwen(
+        translated = translate_with_envit5(
             query_text,
             device="cpu"
         )
 
         if translated and translated.strip():
 
-            print("[INFO] Qwen Fallback Success")
+            print("[INFO] viten5 Fallback Success")
+            print(translated)
 
             return translated
 
     except Exception as e:
 
-        print(f"[WARNING] Qwen cũng lỗi: {e}")
+        print(f"[WARNING] viten5 cũng lỗi: {e}")
 
     # ======================================================
     # TẦNG 3: ORIGINAL
@@ -410,10 +485,10 @@ def dfn5b_vit_h14_retrieval_pipeline(query_text, index_path, config_path):
             embeddings_list.append(tf)
 
     if len(embeddings_list) == 3:
-        combined_tf = 0.35 * embeddings_list[0] + 0.50 * embeddings_list[1] + 0.15 * embeddings_list[2]
+        combined_tf = 0.5 * embeddings_list[0] + 0.35 * embeddings_list[1] + 0.15 * embeddings_list[2]
         combined_tf = F.normalize(combined_tf, p=2, dim=-1)
     elif len(embeddings_list) == 2:
-        combined_tf = 0.40 * embeddings_list[0] + 0.60 * embeddings_list[1]
+        combined_tf = 0.65 * embeddings_list[0] + 0.35 * embeddings_list[1]
         combined_tf = F.normalize(combined_tf, p=2, dim=-1)
     else:
         combined_tf = embeddings_list[0]
@@ -421,7 +496,7 @@ def dfn5b_vit_h14_retrieval_pipeline(query_text, index_path, config_path):
     query_embedding = combined_tf.cpu().float().numpy().astype(np.float32)
 
     print("[INFO] Loading DFN5B-CLIP-ViT-H-14 FAISS index...")
-    index = faiss.read_index(index_path)
+    index = get_faiss_index(index_path)
     scores, indices = index.search(query_embedding, top_k)
 
     results = []

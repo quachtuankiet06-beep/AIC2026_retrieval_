@@ -21,7 +21,7 @@ from src.retrieval.temporal_retrieval_multi_model import temporal_retrieval_mult
 
 # Cấu hình đường dẫn mặc định
 BASE_DIR = ROOT_DIR
-MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes.db"
+MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_new_kf.db"
 RETRIEVAL_CONFIG = BASE_DIR / "configs" / "retrieval.yaml"
 RERANK_CONFIG = BASE_DIR / "configs" / "reranking.yaml"
 VIDEO_FPS_MAPPING_PATH = BASE_DIR / "data" / "mapping" / "video_fps_mapping.json"
@@ -82,16 +82,37 @@ def get_video_path(video_id: str) -> Optional[Path]:
     return None
 
 def get_keyframe_path(video_id: str, img_filename: str) -> Optional[Path]:
-    """Tìm đường dẫn ảnh keyframe trong data/keyframes/"""
+    """Tìm đường dẫn ảnh keyframe trong data/Custom_Keyframes/ hoặc data/keyframes/"""
+    custom_dir = BASE_DIR / "data" / "Custom_Keyframes" / video_id
+    
+    # 1. Thử trực tiếp tên file ảnh trong Custom_Keyframes
+    direct_path = custom_dir / img_filename
+    if direct_path.exists():
+        return direct_path
+
+    # 2. Thử format số frame thành 6 chữ số (VD: 000000.jpg, 000057.jpg)
+    pure_name = Path(img_filename).stem
+    if pure_name.isdigit():
+        idx_val = int(pure_name)
+        six_digit_path = custom_dir / f"{idx_val:06d}.jpg"
+        if six_digit_path.exists():
+            return six_digit_path
+        
+        raw_idx_path = custom_dir / f"{idx_val}.jpg"
+        if raw_idx_path.exists():
+            return raw_idx_path
+
+    # 3. Fallback thư mục keyframes cũ nếu có
     batch_prefix = video_id.split('_')[0] if '_' in video_id else "Keyframes_L21"
     folder_batch = f"Keyframes_{batch_prefix}"
-    
-    full_img_path = BASE_DIR / "data" / "keyframes" / folder_batch / "keyframes" / video_id / img_filename
-    if full_img_path.exists():
-        return full_img_path
+    old_keyframe_path = BASE_DIR / "data" / "keyframes" / folder_batch / "keyframes" / video_id / img_filename
+    if old_keyframe_path.exists():
+        return old_keyframe_path
 
-    # Fallback glob tìm kiếm nếu không ở đúng folder batch chuẩn
-    found_files = list(BASE_DIR.glob(f"**/keyframes/{video_id}/{img_filename}"))
+    # 4. Fallback glob tìm kiếm
+    found_files = list(BASE_DIR.glob(f"**/Custom_Keyframes/{video_id}/{img_filename}"))
+    if not found_files:
+        found_files = list(BASE_DIR.glob(f"**/keyframes/{video_id}/{img_filename}"))
     if found_files:
         return Path(found_files[0])
 
@@ -167,21 +188,21 @@ def execute_search(
     if search_type == "temporal":
         if retrieval_mode == "single":
             if single_model_choice == "siglip2":
-                idx_path = str(BASE_DIR / "data" / "indexes" / "siglip2.index")
+                idx_path = str(BASE_DIR / "data" / "indexes" / "siglip2_keyframes_new.index")
             else:
-                idx_path = str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14.index")
+                idx_path = str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_new.index")
             current_temporal_models = [{"name": single_model_choice, "index_path": idx_path}]
         else:
             current_temporal_models = []
             if use_siglip2:
                 current_temporal_models.append({
                     "name": "siglip2",
-                    "index_path": str(BASE_DIR / "data" / "indexes" / "siglip2.index")
+                    "index_path": str(BASE_DIR / "data" / "indexes" / "siglip2_keyframes_new.index")
                 })
             if use_dfn5b:
                 current_temporal_models.append({
                     "name": "dfn5b_vit_h14",
-                    "index_path": str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14.index")
+                    "index_path": str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_new.index")
                 })
             if not current_temporal_models:
                 raise ValueError("Vui lòng chọn ít nhất một mô hình trong chế độ Multi-Model!")
@@ -230,22 +251,22 @@ def execute_search(
     else:
         if retrieval_mode == "single":
             if single_model_choice == "siglip2":
-                idx_path = BASE_DIR / "data" / "indexes" / "siglip2.index"
+                idx_path = BASE_DIR / "data" / "indexes" / "siglip2_keyframes_new.index"
                 retrieval_results = siglip2_retrieval_pipeline(query, str(idx_path), ret_cfg)
             else:
-                idx_path = BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14.index"
+                idx_path = BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_new.index"
                 retrieval_results = dfn5b_vit_h14_retrieval_pipeline(query, str(idx_path), ret_cfg)
         else:
             selected_models = []
             if use_siglip2:
                 selected_models.append({
                     "name": "siglip2",
-                    "index_path": str(BASE_DIR / "data" / "indexes" / "siglip2.index")
+                    "index_path": str(BASE_DIR / "data" / "indexes" / "siglip2_keyframes_new.index")
                 })
             if use_dfn5b:
                 selected_models.append({
                     "name": "dfn5b_vit_h14",
-                    "index_path": str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14.index")
+                    "index_path": str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_new.index")
                 })
             if not selected_models:
                 raise ValueError("Vui lòng chọn ít nhất một mô hình trong chế độ Multi-Model!")
@@ -288,7 +309,14 @@ def execute_search(
                 s_vid = step_cand.get("video_id", video_id)
                 s_fps = get_video_fps(s_vid)
                 s_frame_val = int(step_cand.get("keyframe_index", step_cand.get("frame_idx", 1)))
-                s_img_filename = f"{s_frame_val:03d}.jpg"
+                
+                # Ưu tiên lấy tên file từ keyframe_path
+                kp = step_cand.get("keyframe_path", "")
+                if kp:
+                    s_img_filename = Path(kp).name
+                else:
+                    s_img_filename = f"{int(step_cand.get('frame_idx', s_frame_val)):06d}.jpg"
+
                 s_ptime = float(step_cand.get("pts_time", 0.0))
                 s_calc_frame = int(round(s_ptime * s_fps))
 
@@ -321,7 +349,14 @@ def execute_search(
             })
         else:
             frame_val = int(res.get("keyframe_index", res.get("frame_idx", 1)))
-            img_filename = f"{frame_val:03d}.jpg"
+            
+            # Ưu tiên lấy tên file từ keyframe_path (Custom_Keyframes lưu 000000.jpg, 000057.jpg)
+            kp = res.get("keyframe_path", "")
+            if kp:
+                img_filename = Path(kp).name
+            else:
+                img_filename = f"{int(res.get('frame_idx', frame_val)):06d}.jpg"
+
             p_time = float(res.get("pts_time", 0.0))
             calc_frame = int(round(p_time * fps))
 

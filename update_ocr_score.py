@@ -8,7 +8,7 @@ print("[INFO] Loading PaddleOCR model...")
 ocr = PaddleOCR(use_gpu=True, lang='vi', show_log=False)
 
 BASE_DIR = Path(__file__).resolve().parent
-MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_mapping.json"
+MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_mapping_new.json"
 
 def main():
     if not MAPPING_PATH.exists():

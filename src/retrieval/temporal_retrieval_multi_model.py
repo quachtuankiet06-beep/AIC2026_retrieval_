@@ -63,7 +63,7 @@ def temporal_sequence_retrieval(
     config_path,
     max_kf_gap=150,     # Khoảng cách tối đa giữa 2 keyframe liên tiếp
     min_kf_gap=1,       # Khoảng cách tối thiểu
-    mapping_path="data/indexes/keyframes_mapping.json",
+    mapping_path="data/indexes/keyframes_new.db",
     beam_width=5,        # Độ rộng chùm tìm kiếm (Beam Width) cho mỗi video
     temporal_nms_window=5,
     top_per_video=30
@@ -89,7 +89,7 @@ def temporal_sequence_retrieval(
             
         enriched_res = mapping_pipeline(
             retrieval_results=res,
-            mapping_path=mapping_path
+            mapping_db_path=mapping_path
         )
         enriched_res = temporal_nms(
             enriched_res,
@@ -306,7 +306,7 @@ def temporal_retrieval_multi_model_pipeline(
     config_path,
     max_kf_gap=150,     
     min_kf_gap=0,      
-    mapping_path="data/indexes/keyframes_mapping.json",
+    mapping_path="data/indexes/keyframes_new.db",
     beam_width=5
 ):
     """

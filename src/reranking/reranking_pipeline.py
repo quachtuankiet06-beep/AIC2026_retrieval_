@@ -1,8 +1,3 @@
-
-
-
-
-
 import os
 import yaml
 import json
@@ -14,6 +9,7 @@ import torch
 import torch.nn.functional as F
 import psutil
 from rank_bm25 import BM25Plus
+import faiss
 from sentence_transformers import CrossEncoder
 try:
     from rapidfuzz import fuzz
@@ -124,11 +120,11 @@ _OBJECT_INDEX = None
 _OBJECT_MAPPING = None
 
 OBJECT_INDEX_PATH = (
-    ROOT / "data" / "indexes" / "object_IVFPQ.index"
+    ROOT / "data" / "indexes" / "object_IVFPQ_new.index"
 )
 
 OBJECT_MAPPING_PATH = (
-    ROOT / "data" / "indexes" / "object_mapping_new.json"
+    ROOT / "data" / "indexes" / "object_mapping_new_kf.json"
 )
 def get_object_index():
 
@@ -378,169 +374,183 @@ def encode_query(
         batch_size=1
     )[0]
 
-def compute_object_scores(
-    query_emb,
-    candidate_list
-):
+def get_translated_query_en(query_text: str, query_en: str = None) -> str:
+    """Tận dụng hàm dịch có sẵn từ retrieval_pipeline để lấy query tiếng Anh cho Object matching"""
+    if query_en and isinstance(query_en, str) and query_en.strip():
+        return query_en.strip()
+    try:
+        from src.retrieval.retrieval_pipeline import expand_and_translate_query
+        translated = expand_and_translate_query(query_text)
+        if translated and translated.strip():
+            return translated.strip()
+    except Exception as e:
+        print(f"[WARNING] Không thể dịch query sang tiếng Anh cho Object reranking: {e}")
+    return query_text
 
+def compute_object_scores(
+    query_emb_en,
+    candidate_list,
+    query_en=""
+):
     print(
-        "[INFO] Computing object scores "
-        "directly from FAISS reconstruct..."
+        "[INFO] Computing Hybrid Object scores (Semantic E5 with English query + Entity Lexical Match)..."
     )
 
     if not candidate_list:
         return candidate_list
 
     # ------------------------------------------------------
+    # 1. Chuẩn bị Query tiếng Anh cho Lexical / Entity Matching
+    # ------------------------------------------------------
+    clean_query_en = ""
+    q_tokens_en = []
+    if query_en:
+        clean_query_en = re.sub(r'[^a-zA-Z0-9\s]', ' ', str(query_en).lower()).strip()
+        q_tokens_en = [w for w in clean_query_en.split() if len(w) >= 2]
+
+    # ------------------------------------------------------
     # Load index + lookup
     # ------------------------------------------------------
-
     object_index, _ = get_object_index()
     object_lookup = get_object_lookup()
 
-    # ------------------------------------------------------
     # Prepare query embedding
-    # ------------------------------------------------------
-
-    query_emb = np.asarray(
-        query_emb,
+    query_emb_en = np.asarray(
+        query_emb_en,
         dtype=np.float32
     ).reshape(1, -1)
 
     # ------------------------------------------------------
     # Statistics
     # ------------------------------------------------------
-
     total_object_vectors = 0
     candidates_with_object = 0
     candidates_without_object = 0
-    total_reconstructed = 0  # Tổng số vector gọi reconstruct
+    total_reconstructed = 0
+
+    semantic_scores = [0.0] * len(candidate_list)
+    lexical_scores = [0.0] * len(candidate_list)
 
     # ------------------------------------------------------
     # Process candidates
     # ------------------------------------------------------
+    for cand_idx, cand in enumerate(candidate_list):
+        video_id = cand.get("video_id", "")
+        keyframe_index = cand.get("keyframe_index")
 
-    for cand in candidate_list:
+        # --------------------------------------------------
+        # A. LEXICAL ENTITY MATCHING VỚI cand["object_entities"]
+        # --------------------------------------------------
+        obj_entities = cand.get("object_entities", [])
+        if not isinstance(obj_entities, list):
+            obj_entities = []
 
-        video_id = cand.get(
-            "video_id",
-            ""
-        )
+        if q_tokens_en and obj_entities:
+            best_entity_score = 0.0
+            matched_count = 0
 
-        keyframe_index = cand.get(
-            "keyframe_index"
-        )
+            clean_entities = [
+                re.sub(r'[^a-zA-Z0-9\s]', ' ', str(e).lower()).strip()
+                for e in obj_entities if str(e).strip()
+            ]
 
+            for ent in clean_entities:
+                if not ent:
+                    continue
+
+                # 1. Exact phrase match (VD: "car", "skyscraper", "land vehicle")
+                if ent in clean_query_en:
+                    best_entity_score = max(best_entity_score, 1.0)
+                    matched_count += 1
+                elif any(w == ent for w in q_tokens_en):
+                    best_entity_score = max(best_entity_score, 1.0)
+                    matched_count += 1
+                elif any(w in ent for w in q_tokens_en if len(w) >= 3):
+                    best_entity_score = max(best_entity_score, 0.8)
+                    matched_count += 1
+                else:
+                    # Fuzzy match
+                    p_ratio = fuzz.partial_ratio(ent, clean_query_en)
+                    if p_ratio >= 85.0:
+                        best_entity_score = max(best_entity_score, p_ratio / 100.0)
+                        matched_count += 1
+
+            if best_entity_score > 0:
+                coverage_bonus = min(0.2, (matched_count / max(1, len(q_tokens_en))) * 0.2)
+                lexical_scores[cand_idx] = min(1.0, best_entity_score + coverage_bonus)
+
+        # --------------------------------------------------
+        # B. SEMANTIC SIMILARITY TỪ FAISS RECONSTRUCT
+        # --------------------------------------------------
         if keyframe_index is None:
-            cand["object_score"] = 0.0
             candidates_without_object += 1
             continue
 
-        # Sửa lại: Tạo key dạng chuỗi khớp với object_mapping_new.json (ví dụ: L21_V001_0001)
         key = f"{video_id}_{int(keyframe_index):04d}"
-
-        vector_indices = object_lookup.get(
-            key,
-            []
-        )
-
-        # --------------------------------------------------
-        # No object
-        # --------------------------------------------------
+        vector_indices = object_lookup.get(key, [])
 
         if not vector_indices:
-
-            cand["object_score"] = 0.0
-
             candidates_without_object += 1
-
             continue
 
         candidates_with_object += 1
-
-        total_object_vectors += len(
-            vector_indices
-        )
-        
+        total_object_vectors += len(vector_indices)
         total_reconstructed += len(vector_indices)
 
-        # --------------------------------------------------
         # Get object vectors (Gọi trực tiếp FAISS reconstruct)
-        # --------------------------------------------------
-
         object_vectors = get_object_vectors(
             object_index,
             vector_indices
         )
 
-        # --------------------------------------------------
-        # Cosine similarity
-        # --------------------------------------------------
-
+        # Cosine similarity với query embedding tiếng Anh
         similarities = (
-            object_vectors @ query_emb.T
+            object_vectors @ query_emb_en.T
         ).reshape(-1)
 
-        # --------------------------------------------------
         # Top-k average
-        # --------------------------------------------------
-
         score = topk_average(
             similarities.tolist(),
             k=3
         )
+        semantic_scores[cand_idx] = max(0.0, float(score))
 
-        cand["object_score"] = round(
-            float(score),
-            4
-        )
+    # ------------------------------------------------------
+    # C. KẾT HỢP HYBRID (Semantic + Entity Lexical Boost)
+    # ------------------------------------------------------
+    for cand_idx, cand in enumerate(candidate_list):
+        s_sem = semantic_scores[cand_idx]
+        s_lex = lexical_scores[cand_idx]
+
+        # Nếu có entity trùng khớp mạnh (s_lex >= 0.70)
+        if s_lex >= 0.70:
+            final_obj = min(1.0, max(s_sem, s_lex) + 0.10 * min(s_sem, s_lex))
+        elif s_lex > 0.0:
+            final_obj = max(s_sem, 0.7 * s_sem + 0.3 * s_lex)
+        else:
+            final_obj = s_sem
+
+        cand["object_semantic_score"] = round(float(s_sem), 4)
+        cand["object_lexical_score"] = round(float(s_lex), 4)
+        cand["object_score"] = round(float(final_obj), 4)
 
     # ------------------------------------------------------
     # DEBUG
     # ------------------------------------------------------
-
     scores = [
-        cand.get(
-            "object_score",
-            0.0
-        )
+        cand.get("object_score", 0.0)
         for cand in candidate_list
     ]
 
-    print(
-        "[DEBUG OBJECT]"
-    )
-
-    print(
-        f"Candidates                 : "
-        f"{len(candidate_list)}"
-    )
-
-    print(
-        f"Candidates with object     : "
-        f"{candidates_with_object}"
-    )
-
-    print(
-        f"Candidates without object  : "
-        f"{candidates_without_object}"
-    )
-
-    print(
-        f"Object vectors evaluated   : "
-        f"{total_object_vectors}"
-    )
-
-    print(
-        f"Vectors reconstructed      : "
-        f"{total_reconstructed}"
-    )
-
+    print("[DEBUG OBJECT]")
+    print(f"Candidates                 : {len(candidate_list)}")
+    print(f"Candidates with object     : {candidates_with_object}")
+    print(f"Candidates without object  : {candidates_without_object}")
+    print(f"Object vectors evaluated   : {total_object_vectors}")
+    print(f"Vectors reconstructed      : {total_reconstructed}")
     print(
         f"Score range                : "
-        f"{min(scores):.4f}"
-        f" -> "
-        f"{max(scores):.4f}"
+        f"{min(scores):.4f} -> {max(scores):.4f}"
     )
 
     return candidate_list
@@ -552,11 +562,11 @@ _METADATA_INDEX = None
 _METADATA_MAPPING = None
 
 METADATA_INDEX_PATH = (
-    ROOT / "data" / "indexes" / "metadata_IVFPQ.index"
+    ROOT / "data" / "indexes" / "metadata_IVFPQ_new.index"
 )
 
 METADATA_MAPPING_PATH = (
-    ROOT / "data" / "indexes" / "metadata_mapping_new.json"
+    ROOT / "data" / "indexes" / "metadata_mapping_new_kf.json"
 )
 
 # ==========================================================
@@ -998,12 +1008,11 @@ def compute_ocr_scores(
 
 def compute_metadata_scores(
     query_emb,
-    candidate_list
+    candidate_list,
+    query_text=""
 ):
-
     print(
-        "[INFO] Computing metadata scores "
-        "directly from FAISS reconstruct..."
+        "[INFO] Computing Hybrid Metadata scores (Semantic E5 + Title/Keywords Lexical BM25+)..."
     )
 
     if not candidate_list:
@@ -1013,41 +1022,60 @@ def compute_metadata_scores(
     metadata_index, _ = get_metadata_index()
     metadata_lookup = get_metadata_lookup()
 
-    # Prepare query
+    # Prepare query embedding
     query_emb = np.asarray(
         query_emb,
         dtype=np.float32
     ).reshape(1, -1)
+
+    # Chuẩn bị Query cho Lexical BM25+ Matching
+    clean_query = ""
+    q_tokens = []
+    if query_text:
+        norm_query = remove_vietnamese_diacritics(query_text)
+        clean_query = clean_ocr_text(norm_query)
+        q_tokens = [w for w in clean_query.split() if len(w) >= 2]
 
     # Statistics
     candidates_with_metadata = 0
     candidates_without_metadata = 0
     total_reconstructed = 0
 
-    for cand in candidate_list:
+    semantic_scores = [0.0] * len(candidate_list)
+    bm25_scores = [0.0] * len(candidate_list)
+    cand_clean_meta_map = [[] for _ in candidate_list]
+
+    for cand_idx, cand in enumerate(candidate_list):
         video_id = cand.get("video_id", "")
         keyframe_index = cand.get("keyframe_index")
 
+        # Chuẩn bị văn bản Metadata (Title + Keywords) cho BM25+
+        meta = cand.get("metadata", {})
+        if isinstance(meta, dict):
+            title = str(meta.get("title", "")).strip()
+            keywords = meta.get("keywords", [])
+            if isinstance(keywords, list):
+                kw_str = " ".join([str(k) for k in keywords])
+            else:
+                kw_str = str(keywords)
+            
+            clean_meta_str = clean_ocr_text(remove_vietnamese_diacritics(f"{title} {kw_str}"))
+            if clean_meta_str:
+                cand_clean_meta_map[cand_idx] = [w for w in clean_meta_str.split() if len(w) >= 2]
+
         if keyframe_index is None:
-            cand["metadata_score"] = 0.0
             candidates_without_metadata += 1
             continue
 
-        # Đổi cách tạo key từ tuple sang chuỗi format khớp với metadata_mapping_new.json (ví dụ: L21_V001_0001)
         key = f"{video_id}_{int(keyframe_index):04d}"
-        
-        # metadata_lookup trả về dict, ví dụ: {"vector_index": 0}
         entry = metadata_lookup.get(key)
 
         if entry is None or "vector_index" not in entry:
-            cand["metadata_score"] = 0.0
             candidates_without_metadata += 1
             continue
 
-        # Lấy vector_index từ trong dict ra
         vector_index = entry.get("vector_index")
         if vector_index is None:
-            cand["metadata_score"] = 0.0
             candidates_without_metadata += 1
             continue
 
@@ -1055,21 +1083,49 @@ def compute_metadata_scores(
         vector_index = int(vector_index)
         total_reconstructed += 1
 
-        # Lấy vector trực tiếp từ FAISS
+        # 1. SEMANTIC SIMILARITY TỪ FAISS RECONSTRUCT
         metadata_vector = get_metadata_vector(
             metadata_index,
             vector_index
         )
 
-        # Cosine similarity
         similarity = float(
             metadata_vector @ query_emb[0]
         )
+        semantic_scores[cand_idx] = max(0.0, float(similarity))
 
-        cand["metadata_score"] = round(
-            similarity,
-            4
-        )
+    # 2. TÍNH ĐIỂM LEXICAL BM25+ TRÊN TITLE VÀ KEYWORDS
+    if q_tokens:
+        corpus_tokens = cand_clean_meta_map
+        if any(len(doc) > 0 for doc in corpus_tokens):
+            full_corpus = [q_tokens] + corpus_tokens
+            bm25_model = BM25Plus(full_corpus, delta=1.0)
+            raw_scores = bm25_model.get_scores(q_tokens)
+            max_possible_score = raw_scores[0]
+
+            if max_possible_score > 0:
+                for cand_idx in range(len(candidate_list)):
+                    cand_raw_score = raw_scores[cand_idx + 1]
+                    norm_score = min(
+                        1.0, max(0.0, cand_raw_score / max_possible_score)
+                    )
+                    bm25_scores[cand_idx] = norm_score
+
+    # 3. KẾT HỢP HYBRID (Semantic + Lexical BM25 Boost)
+    for cand_idx, cand in enumerate(candidate_list):
+        s_sem = semantic_scores[cand_idx]
+        s_bm25 = bm25_scores[cand_idx]
+
+        if s_bm25 >= 0.40:
+            final_meta = min(1.0, max(s_sem, s_bm25) + 0.10 * min(s_sem, s_bm25))
+        elif s_bm25 > 0.0:
+            final_meta = max(s_sem, 0.65 * s_sem + 0.35 * s_bm25)
+        else:
+            final_meta = s_sem
+
+        cand["metadata_semantic_score"] = round(float(s_sem), 4)
+        cand["metadata_bm25_score"] = round(float(s_bm25), 4)
+        cand["metadata_score"] = round(float(final_meta), 4)
 
     # DEBUG
     scores = [
@@ -1875,7 +1931,8 @@ def weighted_score_fusion(
 def reranking_pipeline(
     query_text,
     candidate_list,
-    config_path
+    config_path,
+    query_en=None
 ):
     print_ram("Start")
     if not candidate_list:
@@ -1887,19 +1944,37 @@ def reranking_pipeline(
     # Lấy ocr_threshold từ file yaml, mặc định là 0.5 nếu không khai báo
     ocr_threshold = cfg.get("ocr_threshold", 0.5)
 
+    # Chuẩn bị query tiếng Anh cho Object matching (tận dụng hàm dịch có sẵn của retrieval_pipeline)
+    if not query_en:
+        query_en = get_translated_query_en(query_text)
+
+    print(f"[INFO] Reranking - VI Query: '{query_text}' | EN Query: '{query_en}'")
+
     query_emb = encode_query(query_text)
+    query_emb_en = encode_query(query_en) if (query_en and query_en != query_text) else query_emb
     print_ram("After encode_query")
 
     # Thực thi tuần tự các bước chuẩn hóa và tính toán điểm số
     candidate_list = normalize_retrieval_scores(candidate_list)
     print_ram("After normalize_retrieval")
 
-    candidate_list = compute_object_scores(query_emb, candidate_list)
+    # 1. Hybrid Object Score (Query tiếng Anh + Entity Lexical Match)
+    candidate_list = compute_object_scores(
+        query_emb_en=query_emb_en,
+        candidate_list=candidate_list,
+        query_en=query_en
+    )
     print_ram("After object")
 
-    candidate_list = compute_metadata_scores(query_emb, candidate_list)
+    # 2. Hybrid Metadata Score (Semantic E5 + Title/Keywords Lexical BM25+)
+    candidate_list = compute_metadata_scores(
+        query_emb=query_emb,
+        candidate_list=candidate_list,
+        query_text=query_text
+    )
     print_ram("After metadata")
-    # Truyền query_text và ocr_threshold vào hàm tính điểm OCR kết hợp
+
+    # 3. Hybrid OCR Score (Semantic E5 + Char 3-Gram BM25+)
     candidate_list = compute_ocr_scores(
         query_emb=query_emb,
         candidate_list=candidate_list,
@@ -1907,7 +1982,8 @@ def reranking_pipeline(
         ocr_threshold=ocr_threshold
     )
     print_ram("After OCR")
-    # Truyền query_text vào hàm tính điểm ASR kết hợp
+
+    # 4. Hybrid ASR Score (Semantic E5 + Word-Level BM25+)
     candidate_list = compute_asr_scores(
         query_emb=query_emb,
         candidate_list=candidate_list,
@@ -1915,16 +1991,16 @@ def reranking_pipeline(
     )
     print_ram("After ASR")
 
-    # Tính điểm thưởng nhất quán chuỗi cấp Video (Video-level Narrative Bonus)
+    # 5. Điểm thưởng nhất quán chuỗi cấp Video (Video-level Narrative Bonus)
     candidate_list = compute_video_narrative_bonus(candidate_list, query_text)
 
     # ------------------------------------------------------
     # DEBUG SCORE TABLE
     # ------------------------------------------------------
     print("\n")
-    print("=" * 90)
-    print("RERANKING SCORE DEBUG")
-    print("=" * 90)
+    print("=" * 110)
+    print("RERANKING SCORE DEBUG (HYBRID MULTI-MODAL)")
+    print("=" * 110)
 
     for i, cand in enumerate(candidate_list[:10], start=1):
         print(
@@ -1932,14 +2008,14 @@ def reranking_pipeline(
             f"{cand.get('video_id', 'N/A')} | "
             f"KF={cand.get('keyframe_index', cand.get('frame_idx', 0)):4d} | "
             f"CLIP={cand.get('score', 0.0):.4f} | "
-            f"OBJ={cand.get('object_score', 0.0):.4f} | "
-            f"META={cand.get('metadata_score', 0.0):.4f} | "
-            f"OCR={cand.get('ocr_score', 0.0):.4f} (Sem={cand.get('ocr_semantic_score', 0.0):.2f}, Fuzz={cand.get('ocr_fuzzy_score', 0.0):.2f}) | "
-            f"ASR={cand.get('asr_score', 0.0):.4f} (Sem={cand.get('asr_semantic_score', 0.0):.2f}, Fuzz={cand.get('asr_fuzzy_score', 0.0):.2f}) | "
+            f"OBJ={cand.get('object_score', 0.0):.4f} (Sem={cand.get('object_semantic_score', 0.0):.2f}, Lex={cand.get('object_lexical_score', 0.0):.2f}) | "
+            f"META={cand.get('metadata_score', 0.0):.4f} (Sem={cand.get('metadata_semantic_score', 0.0):.2f}, BM25={cand.get('metadata_bm25_score', 0.0):.2f}) | "
+            f"OCR={cand.get('ocr_score', 0.0):.4f} (Sem={cand.get('ocr_semantic_score', 0.0):.2f}, BM25={cand.get('ocr_bm25_score', 0.0):.2f}) | "
+            f"ASR={cand.get('asr_score', 0.0):.4f} (Sem={cand.get('asr_semantic_score', 0.0):.2f}, BM25={cand.get('asr_bm25_score', 0.0):.2f}) | "
             f"NarrBonus={cand.get('narrative_bonus', 0.0):.2f}"
         )
 
-    print("=" * 90)
+    print("=" * 110)
 
     # Thực hiện trộn điểm tổng hợp dựa trên weights trong yaml
     candidate_list = weighted_score_fusion(
@@ -1949,11 +2025,11 @@ def reranking_pipeline(
     )   
     print_ram("After Fusion")
     
-    # Rerank với Cross-Encoder
+    # Rerank với Cross-Encoder (nếu kích hoạt)
     # candidate_list = rerank_with_bge_m3(query_text, candidate_list, top_n=50)
     # print_ram("After Cross-Encoder")
 
-    # Đóng gói chuẩn xác lại danh sách kết quả trả về cho hệ thống (UI/Streamlit)
+    # Đóng gói chuẩn xác lại danh sách kết quả trả về cho hệ thống (UI/FastAPI)
     results = []
 
     for rank, cand in enumerate(candidate_list, start=1):
@@ -1971,13 +2047,17 @@ def reranking_pipeline(
             "retrieval_score": cand["retrieval_score"],
             "retrieval_score_normalized": cand["retrieval_score_normalized"],
             "object_score": cand["object_score"],
+            "object_semantic_score": cand.get("object_semantic_score", 0.0),
+            "object_lexical_score": cand.get("object_lexical_score", 0.0),
             "metadata_score": cand["metadata_score"],
+            "metadata_semantic_score": cand.get("metadata_semantic_score", 0.0),
+            "metadata_bm25_score": cand.get("metadata_bm25_score", 0.0),
             "ocr_score": cand.get("ocr_score", 0.0),
             "ocr_semantic_score": cand.get("ocr_semantic_score", 0.0),
-            "ocr_fuzzy_score": cand.get("ocr_fuzzy_score", 0.0),
+            "ocr_bm25_score": cand.get("ocr_bm25_score", cand.get("ocr_fuzzy_score", 0.0)),
             "asr_score": cand.get("asr_score", 0.0),
             "asr_semantic_score": cand.get("asr_semantic_score", 0.0),
-            "asr_fuzzy_score": cand.get("asr_fuzzy_score", 0.0),
+            "asr_bm25_score": cand.get("asr_bm25_score", cand.get("asr_fuzzy_score", 0.0)),
             "final_score": cand["final_score"],
             "object_entities": cand.get("object_entities", []),
             "ocr_texts": cand.get("ocr_texts", []),
