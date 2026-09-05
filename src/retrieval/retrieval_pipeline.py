@@ -197,9 +197,12 @@ def decompose_standard_narrative_query(query_text):
         r"(?i)\bbiết sau đó\b",
         r"(?i)\bvà sau đó\b",
         r"(?i)\bsau đó\b",
+        r"(?i)\bsau cùng\b",
         r"(?i)\btiếp theo\b",
         r"(?i)\bkế tiếp\b",
         r"(?i)\bđoạn sau\b",
+        r"(?i)\blúc sau\b",
+        r"(?i)\bở phần sau\b",
         r"(?i)\brồi sau đó\b"
     ]
     
@@ -216,15 +219,15 @@ def decompose_standard_narrative_query(query_text):
             return [query_text, q_main, q_context]
             
     # # 2. Thử tách theo dấu câu nếu câu dài chứa nhiều mệnh đề
-    # sentences = [s.strip() for s in re.split(r"[.\n]+", query_text) if len(s.strip()) > 10]
-    # if len(sentences) >= 2 and len(query_text.split()) > 15:
-    #     q_main = sentences[0]
-    #     q_context = " ".join(sentences[1:])
-    #     print(f"[INFO] Narrative Query Decomposition (Standard Search):")
-    #     print(f"  -> Q_Full   : '{query_text}'")
-    #     print(f"  -> Q_Anchor : '{q_main}'")
-    #     print(f"  -> Q_Context: '{q_context}'")
-    #     return [query_text, q_main, q_context]
+    sentences = [s.strip() for s in re.split(r"[.\n]+", query_text) if len(s.strip()) > 10]
+    if len(sentences) >= 2 and len(query_text.split()) > 15:
+        q_main = sentences[0]
+        q_context = " ".join(sentences[1:])
+        print(f"[INFO] Narrative Query Decomposition (Standard Search):")
+        print(f"  -> Q_Full   : '{query_text}'")
+        print(f"  -> Q_Anchor : '{q_main}'")
+        print(f"  -> Q_Context: '{q_context}'")
+        return [query_text, q_main, q_context]
         
     return [query_text]
 
@@ -306,44 +309,7 @@ def expand_and_translate_query(query_text):
     if not query_text or not query_text.strip():
         return query_text
 
-    # ======================================================
-    # TẦNG 1: GOOGLE TRANSLATE (Retry)
-    # ======================================================
-
-    # translator = GoogleTranslator(source="vi", target="en")
-
-    # for attempt in range(MAX_RETRY):
-
-    #     try:
-
-    #         translated = translator.translate(query_text)
-
-    #         if translated and translated.strip():
-
-    #             print(
-    #                 f"[INFO] Google Translate Success "
-    #                 f"(attempt {attempt+1}/{MAX_RETRY})"
-    #             )
-
-    #             return translated
-
-    #     except Exception as e:
-
-    #         print(
-    #             f"[WARNING] Google Translate failed "
-    #             f"(attempt {attempt+1}/{MAX_RETRY}): {e}"
-    #         )
-
-    #         # exponential backoff
-    #         wait_time = 2 ** attempt + random.uniform(0, 1)
-    #         time.sleep(wait_time)
-
-    # print("[WARNING] Google Translate thất bại hoàn toàn, chuyển sang Qwen...")
-
-    # ======================================================
-    # TẦNG 2: envit5
-    # ======================================================
-
+    
     try:
 
         translated = translate_with_envit5(

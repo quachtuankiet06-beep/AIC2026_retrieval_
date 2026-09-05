@@ -1,0 +1,385 @@
+{
+  "stage1_metrics": {
+    "Total Queries": 36,
+    "MRR": 0.5775,
+    "Recall@1": "19/36 (52.8%)",
+    "Recall@5": "22/36 (61.1%)",
+    "Recall@10": "23/36 (63.9%)",
+    "Recall@50": "34/36 (94.4%)",
+    "Mean Rank (Found)": 11.61
+  },
+  "stage2_metrics": {
+    "Total Queries": 36,
+    "MRR": 0.5691,
+    "Recall@1": "18/36 (50.0%)",
+    "Recall@5": "22/36 (61.1%)",
+    "Recall@10": "26/36 (72.2%)",
+    "Recall@50": "34/36 (94.4%)",
+    "Mean Rank (Found)": 10.67
+  },
+  "stage1_details": {
+    "1": {
+      "target_video_id": "L21_V015",
+      "rank": 10,
+      "reciprocal_rank": 0.1
+    },
+    "2": {
+      "target_video_id": "L21_V029",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "3": {
+      "target_video_id": "L27_V014",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "4": {
+      "target_video_id": "L27_V014",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "5": {
+      "target_video_id": "L29_V023",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "6": {
+      "target_video_id": "L22_V030",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "7": {
+      "target_video_id": "L27_V013",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "8": {
+      "target_video_id": "L30_V017",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "9": {
+      "target_video_id": "L30_V057",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "10": {
+      "target_video_id": "L26_V200",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "11": {
+      "target_video_id": "L30_V095",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "12": {
+      "target_video_id": "L21_V027",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "13": {
+      "target_video_id": "L30_V092",
+      "rank": 27,
+      "reciprocal_rank": 0.037
+    },
+    "14": {
+      "target_video_id": "L26_V004",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "15": {
+      "target_video_id": "L22_V022",
+      "rank": 17,
+      "reciprocal_rank": 0.0588
+    },
+    "16": {
+      "target_video_id": "L23_V007",
+      "rank": 20,
+      "reciprocal_rank": 0.05
+    },
+    "17": {
+      "target_video_id": "L23_V014",
+      "rank": 20,
+      "reciprocal_rank": 0.05
+    },
+    "18": {
+      "target_video_id": "L30_V046",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "19": {
+      "target_video_id": "L28_V018",
+      "rank": 24,
+      "reciprocal_rank": 0.0417
+    },
+    "20": {
+      "target_video_id": "L22_V021",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "21": {
+      "target_video_id": "L26_V035",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "22": {
+      "target_video_id": "L22_V023",
+      "rank": 13,
+      "reciprocal_rank": 0.0769
+    },
+    "23": {
+      "target_video_id": "L26_V041",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "24": {
+      "target_video_id": "L26_V171",
+      "rank": 15,
+      "reciprocal_rank": 0.0667
+    },
+    "25": {
+      "target_video_id": "L29_V013",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "26": {
+      "target_video_id": "L23_V021",
+      "rank": 16,
+      "reciprocal_rank": 0.0625
+    },
+    "27": {
+      "target_video_id": "L22_V029",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "28": {
+      "target_video_id": "L29_V021",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "29": {
+      "target_video_id": "L26_V389",
+      "rank": 3,
+      "reciprocal_rank": 0.3333
+    },
+    "30": {
+      "target_video_id": "L24_V035",
+      "rank": 20,
+      "reciprocal_rank": 0.05
+    },
+    "31": {
+      "target_video_id": "L21_V026",
+      "rank": 5,
+      "reciprocal_rank": 0.2
+    },
+    "32": {
+      "target_video_id": "L22_V011",
+      "rank": 86,
+      "reciprocal_rank": 0.0116
+    },
+    "33": {
+      "target_video_id": "L25_V041",
+      "rank": 16,
+      "reciprocal_rank": 0.0625
+    },
+    "34": {
+      "target_video_id": "L25_V060",
+      "rank": 13,
+      "reciprocal_rank": 0.0769
+    },
+    "35": {
+      "target_video_id": "L29_V001",
+      "rank": 2,
+      "reciprocal_rank": 0.5
+    },
+    "36": {
+      "target_video_id": "L30_V003",
+      "rank": 92,
+      "reciprocal_rank": 0.0109
+    }
+  },
+  "stage2_details": {
+    "1": {
+      "target_video_id": "L21_V015",
+      "rank": 6,
+      "reciprocal_rank": 0.1667
+    },
+    "2": {
+      "target_video_id": "L21_V029",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "3": {
+      "target_video_id": "L27_V014",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "4": {
+      "target_video_id": "L27_V014",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "5": {
+      "target_video_id": "L29_V023",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "6": {
+      "target_video_id": "L22_V030",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "7": {
+      "target_video_id": "L27_V013",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "8": {
+      "target_video_id": "L30_V017",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "9": {
+      "target_video_id": "L30_V057",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "10": {
+      "target_video_id": "L26_V200",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "11": {
+      "target_video_id": "L30_V095",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "12": {
+      "target_video_id": "L21_V027",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "13": {
+      "target_video_id": "L30_V092",
+      "rank": 11,
+      "reciprocal_rank": 0.0909
+    },
+    "14": {
+      "target_video_id": "L26_V004",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "15": {
+      "target_video_id": "L22_V022",
+      "rank": 9,
+      "reciprocal_rank": 0.1111
+    },
+    "16": {
+      "target_video_id": "L23_V007",
+      "rank": 18,
+      "reciprocal_rank": 0.0556
+    },
+    "17": {
+      "target_video_id": "L23_V014",
+      "rank": 18,
+      "reciprocal_rank": 0.0556
+    },
+    "18": {
+      "target_video_id": "L30_V046",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "19": {
+      "target_video_id": "L28_V018",
+      "rank": 27,
+      "reciprocal_rank": 0.037
+    },
+    "20": {
+      "target_video_id": "L22_V021",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "21": {
+      "target_video_id": "L26_V035",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "22": {
+      "target_video_id": "L22_V023",
+      "rank": 12,
+      "reciprocal_rank": 0.0833
+    },
+    "23": {
+      "target_video_id": "L26_V041",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "24": {
+      "target_video_id": "L26_V171",
+      "rank": 17,
+      "reciprocal_rank": 0.0588
+    },
+    "25": {
+      "target_video_id": "L29_V013",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "26": {
+      "target_video_id": "L23_V021",
+      "rank": 14,
+      "reciprocal_rank": 0.0714
+    },
+    "27": {
+      "target_video_id": "L22_V029",
+      "rank": 1,
+      "reciprocal_rank": 1.0
+    },
+    "28": {
+      "target_video_id": "L29_V021",
+      "rank": 5,
+      "reciprocal_rank": 0.2
+    },
+    "29": {
+      "target_video_id": "L26_V389",
+      "rank": 5,
+      "reciprocal_rank": 0.2
+    },
+    "30": {
+      "target_video_id": "L24_V035",
+      "rank": 15,
+      "reciprocal_rank": 0.0667
+    },
+    "31": {
+      "target_video_id": "L21_V026",
+      "rank": 2,
+      "reciprocal_rank": 0.5
+    },
+    "32": {
+      "target_video_id": "L22_V011",
+      "rank": 99,
+      "reciprocal_rank": 0.0101
+    },
+    "33": {
+      "target_video_id": "L25_V041",
+      "rank": 8,
+      "reciprocal_rank": 0.125
+    },
+    "34": {
+      "target_video_id": "L25_V060",
+      "rank": 7,
+      "reciprocal_rank": 0.1429
+    },
+    "35": {
+      "target_video_id": "L29_V001",
+      "rank": 2,
+      "reciprocal_rank": 0.5
+    },
+    "36": {
+      "target_video_id": "L30_V003",
+      "rank": 91,
+      "reciprocal_rank": 0.011
+    }
+  },
+  "avg_latency_sec": 15.78
+}
