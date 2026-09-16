@@ -14,14 +14,14 @@ JSON_PATH = (
     ROOT /
     "data" /
     "indexes" /
-    "keyframes_mapping_new.json"
+    "keyframes_mapping_updated.json"
 )
 
 SQLITE_PATH = (
     ROOT /
     "data" /
     "indexes" /
-    "keyframes_new_kf.db"
+    "keyframes_new_kf_updated.db"
 )
 
 BATCH_SIZE = 1000
