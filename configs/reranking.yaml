@@ -9,15 +9,25 @@
 # asr_weight: 0.05 #nếu tập trung âm thanh -> +0.3
 
 rrf_k: 60
-weights:
+# weights:
 
-  retrieval: 0.6
+#   retrieval: 0.6
 
-  ocr: 0.05
+#   ocr: 0.05
 
-  asr: 0.1
+#   asr: 0.1
 
-  metadata: 0.1
+#   metadata: 0.1
 
-  object: 0.15
+#   object: 0.15
 ocr_threshold: 0.85
+use_vlm_reasoning: True
+reasoning_weight: 0.1
+
+weights:
+  retrieval: 0.5  # Tăng trọng số visual để ưu tiên đúng khung hình
+  metadata: 0.25   # Hạ metadata xuống mức an toàn để tránh nhiễu query miêu tả
+  ocr: 0.05        # Tăng nhẹ OCR để bắt các biển hiệu/chữ trên màn hình tốt hơn
+  asr: 0.05
+  object: 0.15
+  reasoning: 0.1

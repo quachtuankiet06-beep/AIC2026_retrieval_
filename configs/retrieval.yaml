@@ -1,8 +1,17 @@
-top_k: 1000
+top_k: 1200
 retrieval_threshold: 0.0
 
 # Định nghĩa trọng số gộp kết quả đa mô hình (Multi-model Fusion Weights)
 model_weights:
-  siglip2: 1.2
+  siglip2: 1
   dfn5b_vit_h14: 1
-        
+
+
+# Video Consensus Configuration
+# use_video_consensus: true
+# consensus_top_videos: 1200
+# mapping_path: "D:/tai_lieu_hoc_tap/AIC_2026/data/indexes/keyframes_new_kf.db"
+# query_part_weights:
+#   main: 0.7
+#   full: 0.2
+#   context: 0.1
