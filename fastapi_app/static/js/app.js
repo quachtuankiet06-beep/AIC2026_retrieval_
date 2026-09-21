@@ -22,32 +22,60 @@ function formatHms(seconds) {
 }
 
 // Copy text to clipboard and show toast
-function copyText(text) {
+window.copyText = function(text) {
     if (!text) return;
-    navigator.clipboard.writeText(text).then(() => {
-        showToast(`Đã sao chép: ${text}`);
-    }).catch(err => {
-        console.error("Copy failed:", err);
-        // Fallback
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        document.body.appendChild(textarea);
-        textarea.select();
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(() => {
+            showToast(`Đã sao chép: ${text}`, "success");
+        }).catch(() => {
+            fallbackCopyText(text);
+        });
+    } else {
+        fallbackCopyText(text);
+    }
+};
+
+function fallbackCopyText(text) {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = "fixed";
+    textArea.style.left = "-999999px";
+    textArea.style.top = "-999999px";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
         document.execCommand("copy");
-        document.body.removeChild(textarea);
-        showToast(`Đã sao chép: ${text}`);
-    });
+        showToast(`Đã sao chép: ${text}`, "success");
+    } catch (err) {
+        showToast("Không thể sao chép tự động", "error");
+    }
+    document.body.removeChild(textArea);
 }
 
-function showToast(msg) {
+window.showToast = function(msg, type = "success") {
     const toast = document.getElementById("toast");
     const toastMsg = document.getElementById("toastMsg");
+    if (!toast || !toastMsg) return;
+
     toastMsg.innerText = msg;
+    const icon = toast.querySelector("i");
+    if (icon) {
+        if (type === "info") {
+            icon.className = "fa-solid fa-circle-info";
+        } else if (type === "error") {
+            icon.className = "fa-solid fa-triangle-exclamation";
+        } else {
+            icon.className = "fa-solid fa-circle-check";
+        }
+    }
+
     toast.classList.add("show");
-    setTimeout(() => {
+    clearTimeout(window._toastTimeout);
+    window._toastTimeout = setTimeout(() => {
         toast.classList.remove("show");
     }, 2500);
-}
+};
 
 // ==========================================
 // 1. SIDEBAR CONTROLS
@@ -243,12 +271,19 @@ async function performSearch() {
     }
 }
 
+// Quản lý danh sách các Video ID bị vô hiệu hóa
+window.dismissedVideos = new Set();
+window.hideDismissedMode = false;
+
 // Render search results list
 function renderSearchResults(data) {
     const resultsArea = document.getElementById("resultsArea");
     const results = data.results || [];
     const total = data.total || 0;
     const isTemporal = data.search_type === "temporal";
+
+    // Reset danh sách video bị loại khi thực hiện tìm kiếm mới
+    window.dismissedVideos.clear();
 
     if (results.length === 0) {
         resultsArea.innerHTML = `
@@ -266,6 +301,16 @@ function renderSearchResults(data) {
         <div class="results-header">
             <div class="results-count">
                 Tìm thấy <span>${total}</span> kết quả. Đang hiển thị Top <span>${results.length}</span>:
+            </div>
+            <div class="dismiss-controls">
+                <label class="checkbox-label" style="font-size: 0.85rem; margin: 0; cursor: pointer;" title="Tự động ẩn hẳn các card thuộc video đã loại">
+                    <input type="checkbox" id="hideDismissedToggle" onchange="toggleHideDismissed(this.checked)">
+                    <span>Ẩn hẳn video đã loại</span>
+                </label>
+                <span id="dismissedSummaryBadge" class="badge-dismissed" style="display: none;">Đã loại: 0 video</span>
+                <button id="btnRestoreAll" class="btn btn-sm btn-secondary" onclick="restoreAllVideos()" style="display: none;">
+                    <i class="fa-solid fa-rotate-left"></i> Khôi phục tất cả
+                </button>
             </div>
         </div>
     `;
@@ -304,9 +349,21 @@ function renderStandardCard(item, idx) {
         : '';
 
     return `
-        <div class="result-card" id="card_${rank}">
+        <div class="result-card" id="card_${rank}" data-video-id="${videoId}">
+            <div class="dismissed-overlay-bar">
+                <span><i class="fa-solid fa-ban"></i> Đã vô hiệu hóa video <b>${videoId}</b> (toàn bộ candidates cùng video này)</span>
+                <button class="btn-undo-dismiss" onclick="restoreVideo('${videoId}')">
+                    <i class="fa-solid fa-rotate-left"></i> Khôi phục video này
+                </button>
+            </div>
+
             <div class="card-top">
-                <span class="rank-badge"><i class="fa-solid fa-trophy"></i> Top Rank ${rank}</span>
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <span class="rank-badge"><i class="fa-solid fa-trophy"></i> Top Rank ${rank}</span>
+                    <button class="btn-dismiss-video" onclick="dismissVideo('${videoId}')" title="Vô hiệu hóa toàn bộ candidates thuộc video ${videoId}">
+                        <i class="fa-solid fa-ban"></i> Loại Video (${videoId})
+                    </button>
+                </div>
                 <span class="submission-code">${defaultSub}</span>
             </div>
 
@@ -409,9 +466,21 @@ function renderTemporalCard(item, idx) {
     });
 
     return `
-        <div class="result-card" id="card_temp_${rank}">
+        <div class="result-card" id="card_temp_${rank}" data-video-id="${videoId}">
+            <div class="dismissed-overlay-bar">
+                <span><i class="fa-solid fa-ban"></i> Đã vô hiệu hóa chuỗi video <b>${videoId}</b> (toàn bộ candidates cùng video này)</span>
+                <button class="btn-undo-dismiss" onclick="restoreVideo('${videoId}')">
+                    <i class="fa-solid fa-rotate-left"></i> Khôi phục video này
+                </button>
+            </div>
+
             <div class="card-top">
-                <span class="rank-badge"><i class="fa-solid fa-film"></i> Rank ${rank} (Chuỗi ${steps.length} bước)</span>
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <span class="rank-badge"><i class="fa-solid fa-film"></i> Rank ${rank} (Chuỗi ${steps.length} bước)</span>
+                    <button class="btn-dismiss-video" onclick="dismissVideo('${videoId}')" title="Vô hiệu hóa toàn bộ candidates thuộc video ${videoId}">
+                        <i class="fa-solid fa-ban"></i> Loại Video (${videoId})
+                    </button>
+                </div>
                 <div class="meta-item"><b>Final Score TB:</b> <span style="color: var(--warning);">${item.final_score.toFixed(6)}</span></div>
             </div>
             <div style="margin-bottom: 8px; font-size: 0.95rem;"><b>Video ID chung:</b> <code>${videoId}</code></div>
@@ -588,3 +657,103 @@ function initVideoPlayerListeners() {
         vid.addEventListener("play", updateLiveInfo);
     });
 }
+
+// ==========================================
+// TÍNH NĂNG: VÔ HIỆU HÓA TOÀN BỘ CANDIDATES THEO VIDEO ID
+// ==========================================
+
+// Cập nhật thống kê và trạng thái nút điều khiển trên header
+function updateDismissStats() {
+    const badge = document.getElementById("dismissedSummaryBadge");
+    const btnRestoreAll = document.getElementById("btnRestoreAll");
+    const dismissedCards = document.querySelectorAll(".result-card.card-dismissed");
+
+    const dismissedCount = window.dismissedVideos.size;
+    const cardCount = dismissedCards.length;
+
+    if (badge) {
+        if (dismissedCount > 0) {
+            badge.style.display = "inline-block";
+            badge.innerHTML = `<i class="fa-solid fa-ban"></i> Đã loại: <b>${dismissedCount}</b> video (${cardCount} thẻ)`;
+        } else {
+            badge.style.display = "none";
+        }
+    }
+
+    if (btnRestoreAll) {
+        btnRestoreAll.style.display = dismissedCount > 0 ? "inline-flex" : "none";
+    }
+}
+
+// Vô hiệu hóa một video (toàn bộ thẻ có cùng data-video-id)
+window.dismissVideo = function(videoId) {
+    if (!videoId) return;
+
+    window.dismissedVideos.add(videoId);
+
+    // Tìm tất cả các thẻ có videoId này
+    const cards = document.querySelectorAll(`.result-card[data-video-id="${videoId}"]`);
+    cards.forEach(card => {
+        card.classList.add("card-dismissed");
+        if (window.hideDismissedMode) {
+            card.classList.add("dismissed-hidden");
+        }
+        // Dừng video player nếu đang phát
+        const player = card.querySelector("video");
+        if (player && !player.paused) {
+            player.pause();
+        }
+    });
+
+    updateDismissStats();
+    showToast(`Đã loại toàn bộ candidates của video ${videoId} (${cards.length} thẻ)`, "info");
+};
+
+// Khôi phục một video cụ thể
+window.restoreVideo = function(videoId) {
+    if (!videoId) return;
+
+    window.dismissedVideos.delete(videoId);
+
+    const cards = document.querySelectorAll(`.result-card[data-video-id="${videoId}"]`);
+    cards.forEach(card => {
+        card.classList.remove("card-dismissed");
+        card.classList.remove("dismissed-hidden");
+    });
+
+    updateDismissStats();
+    showToast(`Đã khôi phục video ${videoId}`, "success");
+};
+
+// Khôi phục tất cả các video đã bị loại
+window.restoreAllVideos = function() {
+    if (window.dismissedVideos.size === 0) return;
+
+    window.dismissedVideos.clear();
+
+    const allDismissedCards = document.querySelectorAll(".result-card.card-dismissed");
+    allDismissedCards.forEach(card => {
+        card.classList.remove("card-dismissed");
+        card.classList.remove("dismissed-hidden");
+    });
+
+    updateDismissStats();
+    showToast("Đã khôi phục lại toàn bộ video đã loại", "success");
+};
+
+// Bật/tắt chế độ ẩn hẳn các card đã bị loại
+window.toggleHideDismissed = function(isChecked) {
+    window.hideDismissedMode = isChecked;
+
+    const allDismissedCards = document.querySelectorAll(".result-card.card-dismissed");
+    allDismissedCards.forEach(card => {
+        if (isChecked) {
+            card.classList.add("dismissed-hidden");
+        } else {
+            card.classList.remove("dismissed-hidden");
+        }
+    });
+};
+
+
+

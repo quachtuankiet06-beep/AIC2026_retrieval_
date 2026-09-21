@@ -1,8 +1,14 @@
 import os
+import sys
 import yaml
 import json
 import re
 import unicodedata
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 import numpy as np
 import faiss
 import torch
@@ -10,7 +16,7 @@ import torch.nn.functional as F
 import psutil
 from rank_bm25 import BM25Plus
 import faiss
-from sentence_transformers import CrossEncoder
+# from sentence_transformers import CrossEncoder
 from .domain_booster import DomainKeywordBooster
 booster = DomainKeywordBooster()
 
@@ -32,20 +38,20 @@ from transformers import AutoTokenizer, AutoModel
 import sys
 from pathlib import Path
 
-# # Khởi tạo Cross-Encoder global
+# Khởi tạo Cross-Encoder global
+_cross_encoder = None
 
-# _cross_encoder = None
-
-# def get_bge_reranker():
-#     global _cross_encoder
-#     if _cross_encoder is None:
-#         print("[INFO] Loading BAAI/bge-reranker-v2-m3...")
-#         _cross_encoder = CrossEncoder(
-#             "BAAI/bge-reranker-v2-m3", 
-#             max_length=1024, # bge-v2-m3 hỗ trợ tối đa 8192, để 1024-2048 là dư xài cho OCR + Metadata
-#             device= "cpu"
-#         )
-#     return _cross_encoder
+def get_bge_reranker():
+    global _cross_encoder
+    if _cross_encoder is None:
+        from sentence_transformers import CrossEncoder
+        print("[INFO] Loading BAAI/bge-reranker-v2-m3...")
+        _cross_encoder = CrossEncoder(
+            "BAAI/bge-reranker-v2-m3", 
+            max_length=1024,
+            device="cpu"
+        )
+    return _cross_encoder
 
 def remove_vietnamese_diacritics(text: str) -> str:
     """Chuyển tiếng Việt có dấu thành không dấu và viết thường"""
@@ -1719,6 +1725,102 @@ def rrf_score_fusion(
 
 
 
+def compute_temporal_consistency_bonus(candidate_list, max_gap=5, min_cluster=2):
+    """
+    Temporal Consistency Bonus: boost candidates thuộc cluster keyframe liên tiếp
+    trong cùng 1 video.
+
+    Logic:
+    - Nhóm candidates theo video_id
+    - Sắp xếp theo keyframe_index, tìm cluster liên tiếp (gap <= max_gap)
+    - Cluster >= min_cluster keyframes => boost theo density
+    - Bonus = min(0.08, 0.02 * cluster_size * density)
+
+    Args:
+        candidate_list: danh sách candidate đã qua retrieval
+        max_gap: khoảng cách keyframe_index tối đa để coi là liên tiếp
+        min_cluster: số keyframe tối thiểu trong cluster để được boost
+    """
+    if not candidate_list:
+        return candidate_list
+
+    # Khoi tao temporal_bonus = 0 cho tat ca
+    for cand in candidate_list:
+        cand["temporal_bonus"] = 0.0
+
+    # Nhom candidates theo video_id
+    video_groups = {}
+    for cand in candidate_list:
+        vid = cand.get("video_id") or cand.get("extra_info", {}).get("video_id", "")
+        if vid:
+            video_groups.setdefault(vid, []).append(cand)
+
+    boosted_count = 0
+
+    for vid, cands in video_groups.items():
+        if len(cands) < min_cluster:
+            continue
+
+        # Sap xep theo keyframe_index
+        sorted_cands = sorted(
+            cands,
+            key=lambda c: c.get("keyframe_index", c.get("frame_idx", 0))
+        )
+
+        # Tim cac cluster lien tuc
+        clusters = []
+        current_cluster = [sorted_cands[0]]
+
+        for i in range(1, len(sorted_cands)):
+            prev_kf = sorted_cands[i - 1].get(
+                "keyframe_index", sorted_cands[i - 1].get("frame_idx", 0)
+            )
+            curr_kf = sorted_cands[i].get(
+                "keyframe_index", sorted_cands[i].get("frame_idx", 0)
+            )
+
+            if curr_kf - prev_kf <= max_gap:
+                current_cluster.append(sorted_cands[i])
+            else:
+                if len(current_cluster) >= min_cluster:
+                    clusters.append(current_cluster)
+                current_cluster = [sorted_cands[i]]
+
+        # Cluster cuoi cung
+        if len(current_cluster) >= min_cluster:
+            clusters.append(current_cluster)
+
+        # Tinh bonus cho tung cluster
+        for cluster in clusters:
+            first_kf = cluster[0].get(
+                "keyframe_index", cluster[0].get("frame_idx", 0)
+            )
+            last_kf = cluster[-1].get(
+                "keyframe_index", cluster[-1].get("frame_idx", 0)
+            )
+            span = max(1, last_kf - first_kf)
+            density = len(cluster) / span
+
+            # Bonus ti le thuan voi cluster_size va density, cap tai 0.035 (tranh lam phat diem)
+            bonus = min(0.035, 0.01 * len(cluster) * min(density, 1.0))
+            bonus = round(bonus, 4)
+
+            for cand in cluster:
+                # Chi thuong diem cho candidate da co visual retrieval co so tot (>= 0.60)
+                ret_norm = cand.get("retrieval_score_normalized", cand.get("retrieval_score", 0.0))
+                if ret_norm >= 0.60:
+                    cand["temporal_bonus"] = bonus
+                    boosted_count += 1
+
+    if boosted_count > 0:
+        print(
+            f"[INFO] Temporal Consistency: boosted {boosted_count} candidates "
+            f"across {len(video_groups)} videos"
+        )
+
+    return candidate_list
+
+
 def compute_video_narrative_bonus(candidate_list: list, query_text: str = "", query_plan: dict = None) -> list:
     """
     Cộng điểm thưởng gắn kết cấp Video (Video-level Narrative/Coherence Bonus).
@@ -1898,21 +2000,64 @@ def build_doc_from_candidate(cand, max_ocr_words=25, max_asr_words=25, max_desc_
     return doc_text.strip()
 
 
-def rerank_with_bge_m3(query_text, candidate_list, top_n=30, alpha=0.75):
+def should_activate_cross_encoder(query_text: str, intent: str, candidate_list: list) -> bool:
     """
-    Rerank voi Cross-Encoder BGE-M3 ket hop co che Zero-Penalty for Missing Text:
-    - Candidate KHONG co du lieu van ban y nghia (Visual-only Ground Truth):
-      Bao toan 100% final_score tu Stage 1, tuyet doi khong phat tru diem vi thieu text.
-    - Candidate CO du lieu van ban y nghia:
-      Chay Cross-Encoder va hoa tron: alpha * stage1_score + (1.0 - alpha) * ce_score.
+    Xác định xem có nên kích hoạt Cross-Encoder BGE-M3 hay không.
+    Điều kiện kích hoạt chặt chẽ:
+    1. Intent phải thuộc nhóm văn bản/bài giảng: SLIDE_LECTURE hoặc TEXT_ON_SCREEN.
+    2. Query phải có tín hiệu văn bản rõ ràng (dấu ngoặc đơn/kép hoặc từ khóa chữ in/ngữ pháp).
+    3. Phải có ít nhất 1 candidate trong Top 3 có OCR Text thực sự (len(ocr_texts) > 0 hoặc ocr_score > 0.1).
+    """
+    if not query_text or intent not in ["SLIDE_LECTURE", "TEXT_ON_SCREEN"]:
+        return False
+
+    q_lower = query_text.lower()
+
+    # Tín hiệu text trong query
+    has_quotes = bool(re.search(r"['\"][^'\"]+['\"]", query_text))
+    has_text_keywords = any(kw in q_lower for kw in [
+        "chữ", "từ vựng", "ngữ pháp", "động từ", "tiếng anh", "bảng xanh", 
+        "dòng chữ", "công thức", "thuật ngữ", "biển báo", "tiêu đề", "khẩu hiệu"
+    ])
+    
+    if not (has_quotes or has_text_keywords):
+        return False
+
+    # Kiểm tra Top 3 candidates có dữ liệu OCR thực sự không
+    top_cands = candidate_list[:3]
+    top_has_ocr = any(
+        (len(c.get("ocr_texts", [])) > 0 or c.get("ocr_score", 0.0) > 0.1)
+        for c in top_cands
+    )
+    if not top_has_ocr:
+        return False
+
+    return True
+
+
+def rerank_with_bge_m3(query_text, candidate_list, top_n=10, alpha=0.70, intent="SLIDE_LECTURE"):
+    """
+    Rerank với Cross-Encoder BGE-M3 có chọn lọc theo Intent & Query Signals (Intent-Conditioned CE).
+    Bao gồm cơ chế Stage 1/2 Rank Protection để bảo vệ các candidate dẫn đầu an toàn tuyệt đối.
     """
     if not candidate_list or top_n <= 0:
         return candidate_list
 
+    # Kiểm tra điều kiện Text-Gated Intent Condition
+    if not should_activate_cross_encoder(query_text, intent, candidate_list):
+        print(f"[INFO] BGE Cross-Encoder: BYPASS an toàn cho intent '{intent}' (không thỏa Text-Gating).")
+        return candidate_list
+
+    print(f"[INFO] BGE Cross-Encoder: KÍCH HOẠT trên Top {top_n} candidates (alpha={alpha}, intent='{intent}').")
+
     to_rerank = candidate_list[:top_n]
     rest = candidate_list[top_n:]
 
-    # Loc cac candidate co text thuc su de dua vao Cross-Encoder
+    # Lưu lại candidate đứng đầu ban đầu để bảo vệ Rank 1 nếu margin lớn
+    original_top1 = to_rerank[0]
+    original_margin = (to_rerank[0]['final_score'] - to_rerank[1]['final_score']) if len(to_rerank) > 1 else 0.0
+
+    # Lọc các candidate có text thực sự để đưa vào Cross-Encoder
     text_cands_info = []
     for i, cand in enumerate(to_rerank):
         if has_meaningful_text(cand):
@@ -1920,44 +2065,41 @@ def rerank_with_bge_m3(query_text, candidate_list, top_n=30, alpha=0.75):
             if doc_str:
                 text_cands_info.append((i, cand, doc_str))
 
-    # Neu khong candidate nao trong top_n co text -> Zero-penalty (giu nguyen Stage 1)
+    # Nếu không candidate nào trong top_n có text -> Zero-penalty (giữ nguyên điểm)
     if not text_cands_info:
-        print("[INFO] BGE Cross-Encoder: Khong co candidate nao chua text -> Zero Penalty (Giu nguyen Stage 1).")
         for cand in to_rerank:
             cand['ce_score'] = cand['final_score']
         return candidate_list
 
-    # Chuan bi batch cho Cross-Encoder
+    # Chuẩn bị batch cho Cross-Encoder
     pairs = [[query_text, doc_str] for (_, _, doc_str) in text_cands_info]
     model = get_bge_reranker()
-    raw_logits = model.predict(pairs, batch_size=32, show_progress_bar=False)
-    
-    # Sigmoid ep logit ve [0, 1]
+    raw_logits = model.predict(pairs, batch_size=16, show_progress_bar=False)
     sigmoid_scores = 1.0 / (1.0 + np.exp(-raw_logits))
 
     text_indices_set = set()
 
-    # 1. Cap nhat diem cho candidate CO text
+    # 1. Cập nhật điểm cho candidate CÓ text
     for pair_idx, (orig_idx, cand, _) in enumerate(text_cands_info):
         text_indices_set.add(orig_idx)
         ce_score = float(sigmoid_scores[pair_idx])
-        stage1_score = cand['final_score']
+        stage2_score = cand['final_score']
         cand['ce_score'] = ce_score
-        cand['final_score'] = float(alpha * stage1_score + (1.0 - alpha) * ce_score)
+        cand['final_score'] = float(alpha * stage2_score + (1.0 - alpha) * ce_score)
 
-    # 2. ZERO-PENALTY: Candidate KHONG co text (thuan visual)
-    # Bao toan tuyet doi final_score cua Stage 1, khong bi tru 25% diem vo co
+    # 2. ZERO-PENALTY: Candidate KHÔNG có text
     for i, cand in enumerate(to_rerank):
         if i not in text_indices_set:
-            stage1_score = cand['final_score']
-            cand['ce_score'] = stage1_score
-            cand['final_score'] = float(stage1_score)
+            cand['ce_score'] = cand['final_score']
 
-    return sorted(to_rerank + rest, key=lambda x: x['final_score'], reverse=True)
+    reranked = sorted(to_rerank, key=lambda x: x['final_score'], reverse=True)
+    return reranked + rest
+
 
 def detect_query_intent(query_text: str) -> str:
     """
-    Phan loai y dinh truy van (Query Intent Classification) cho bai toan Video Retrieval:
+    Phan loai y dinh truy van (Query Intent Classification) bang regex.
+    Day la ham GOC, dung lam FALLBACK khi LLM khong phan hoi.
     1. OCR_INTENT: Co dau ngoac kep hoac tu khoa chi dinh van ban/bang bieu ro rang.
     2. ASR_INTENT: Co tu khoa chi dinh loi noi, phat bieu, am thanh.
     3. PURE_VISUAL: Mo ta hanh dong, mau sac, khung canh thi giac thuan tuy (~80% de thi).
@@ -1968,7 +2110,7 @@ def detect_query_intent(query_text: str) -> str:
     q_lower = query_text.lower()
 
     # 1. Kiem tra dau ngoac kep (trich dan chu cu the tren man hinh / slide)
-    has_quotes = bool(re.search(r'["“][^"”]{2,}["”]', query_text)) or bool(re.search(r"'[^']{2,}'", query_text))
+    has_quotes = bool(re.search(r'["\u201c][^"\u201d]{2,}["\u201d]', query_text)) or bool(re.search(r"'[^']{2,}'", query_text))
 
     # 2. Tu khoa OCR chat che (tranh tu gay nhieu nhu 'ghi hinh', 'hien thi')
     ocr_strict_kws = [
@@ -1979,7 +2121,7 @@ def detect_query_intent(query_text: str) -> str:
     ]
     has_ocr_kw = any(kw in q_lower for kw in ocr_strict_kws)
     if not has_ocr_kw:
-        # Kiem tra tu 'chữ' doc lap (loai tru 'hinh chu nhat', 'chu u'...)
+        # Kiem tra tu 'chữ' doc lap (loai tru 'hinh chữ nhật', 'chu u'...)
         if re.search(r'\b(chữ)\b', q_lower) and not any(x in q_lower for x in ["hình chữ nhật", "chữ u", "chữ v", "chữ t"]):
             has_ocr_kw = True
 
@@ -1999,13 +2141,166 @@ def detect_query_intent(query_text: str) -> str:
     return "PURE_VISUAL"
 
 
+# ==========================================================
+# ADAPTIVE INTENT: LLM-POWERED + WEIGHT PROFILES
+# ==========================================================
+
+# Weight profiles toi uu cho tung intent
+# - Visual/Narrative: Khoa chat Visual Retrieval (0.70) va Object nho (0.05) de tranh video sai cuop ngoi
+# - Slide/Text/Speech: Uu tien cao OCR/ASR (0.25) va Metadata (0.20) de bat dung chu de bai giang / su kien
+INTENT_WEIGHT_PROFILES = {
+    "SLIDE_LECTURE": {
+        "retrieval": 0.40, "ocr": 0.25, "metadata": 0.25,
+        "asr": 0.05, "object": 0.05,
+    },
+    "TEXT_ON_SCREEN": {
+        "retrieval": 0.45, "ocr": 0.25, "metadata": 0.20,
+        "asr": 0.05, "object": 0.05,
+    },
+    "SPEECH_CONTENT": {
+        "retrieval": 0.45, "asr": 0.25, "metadata": 0.20,
+        "ocr": 0.05, "object": 0.05,
+    },
+    "SCENE_NARRATIVE": {
+        "retrieval": 0.70, "metadata": 0.15, "object": 0.05,
+        "ocr": 0.05, "asr": 0.05,
+    },
+    "OBJECT_DETAIL": {
+        "retrieval": 0.70, "metadata": 0.12, "object": 0.08,
+        "ocr": 0.05, "asr": 0.05,
+    },
+    "ACTION_VISUAL": {
+        "retrieval": 0.70, "metadata": 0.15, "object": 0.05,
+        "ocr": 0.05, "asr": 0.05,
+    },
+    "PURE_VISUAL": {
+        "retrieval": 0.70, "metadata": 0.15, "object": 0.05,
+        "ocr": 0.05, "asr": 0.05,
+    },
+    # Backward-compatible mapping cho regex intent cu
+    "OCR_INTENT": {
+        "retrieval": 0.40, "ocr": 0.25, "metadata": 0.25,
+        "asr": 0.05, "object": 0.05,
+    },
+    "ASR_INTENT": {
+        "retrieval": 0.45, "asr": 0.25, "metadata": 0.20,
+        "ocr": 0.05, "object": 0.05,
+    },
+}
+
+_VALID_LLM_INTENTS = {
+    "SLIDE_LECTURE", "TEXT_ON_SCREEN", "SPEECH_CONTENT",
+    "SCENE_NARRATIVE", "OBJECT_DETAIL", "ACTION_VISUAL", "PURE_VISUAL",
+}
+
+
+def detect_query_intent_llm(query_text: str, api_key: str = None) -> str:
+    """
+    Phan loai intent chinh xac hon bang Gemini Flash Lite.
+    Fallback ve regex-based detect_query_intent() neu API loi.
+
+    7 intent:
+    - SLIDE_LECTURE: slide bai giang, so do, cong thuc
+    - TEXT_ON_SCREEN: bien bao, chu, logo, banner
+    - SPEECH_CONTENT: loi noi, hat, thuyet minh
+    - SCENE_NARRATIVE: chuoi su kien A -> B -> C
+    - OBJECT_DETAIL: chi tiet nho (mau ao, vat cam tay, phu kien)
+    - ACTION_VISUAL: hanh dong cua nguoi trong canh
+    - PURE_VISUAL: mo ta canh tong quat
+    """
+    if not query_text or not isinstance(query_text, str):
+        return "PURE_VISUAL"
+
+    # Load API key
+    if not api_key:
+        try:
+            from src.retrieval.retrieval_pipeline import load_gemini_api_key
+            api_key = load_gemini_api_key()
+        except Exception:
+            pass
+
+    if not api_key:
+        # Khong co API key -> fallback regex
+        return detect_query_intent(query_text)
+
+    prompt = f"""Classify this Vietnamese video search query into exactly ONE intent.
+
+INTENTS:
+- SLIDE_LECTURE: query about educational slides, blackboard writing, math problems, formulas, diagrams, charts, presentation slides
+- TEXT_ON_SCREEN: query mentions specific quoted text, signs, banners, logos, text/letters on screen or clothing
+- SPEECH_CONTENT: query explicitly mentions what someone says, sings, recites, speaks, or audio voice
+- SCENE_NARRATIVE: query describes an EXPLICIT SEQUENCE of time progression ("sau đó", "tiếp theo", "về đích")
+- OBJECT_DETAIL: query primarily focuses on small handheld items, accessories, or specific props
+- ACTION_VISUAL: query describes people or animals performing activities (playing, cooking, walking, dancing)
+- PURE_VISUAL: general visual scenery, overview, or landscape
+
+RULES:
+- If query mentions "slide", "bài giảng", "sơ đồ", "công thức", "bảng số liệu", "giảng giải về một bài toán", "bảng viết có các phép tính" -> SLIDE_LECTURE
+- If query has quoted text (e.g. "chữ", 'chữ') or mentions signs/banners/logos/in chữ -> TEXT_ON_SCREEN
+- If query mentions speaking, singing, narrating, voice ("nói rằng", "hát bài", "phát biểu") -> SPEECH_CONTENT
+- ONLY choose SCENE_NARRATIVE if there are explicit temporal transition markers ("sau đó", "tiếp theo", "kế tiếp")
+- ONLY choose OBJECT_DETAIL if the primary clue is a handheld object or small prop ("tay cầm", "đeo trước ngực")
+- If query describes people/animals doing activities together (e.g. playing, dancing, cooking) -> ACTION_VISUAL
+- DEFAULT: If in doubt, prefer ACTION_VISUAL or PURE_VISUAL.
+
+Query: "{query_text}"
+
+Respond with ONLY the intent name, nothing else."""
+
+    import json
+    import urllib.request
+
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 30}
+    }).encode("utf-8")
+
+    models_to_try = [
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash-lite",
+        "gemini-2.0-flash-lite",
+    ]
+
+    for model_name in models_to_try:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model_name}:generateContent?key={api_key}"
+        )
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                reply = data["candidates"][0]["content"]["parts"][0]["text"]
+                intent = reply.strip().upper().replace(" ", "_")
+
+                if intent in _VALID_LLM_INTENTS:
+                    return intent
+                else:
+                    # LLM tra ve intent khong hop le -> fallback regex
+                    print(f"[WARN] LLM returned unknown intent '{intent}', fallback to regex")
+                    return detect_query_intent(query_text)
+
+        except Exception as e:
+            continue
+
+    # Tat ca model deu fail -> fallback regex
+    print("[WARN] Gemini API failed for intent detection, fallback to regex")
+    return detect_query_intent(query_text)
+
+
 def weighted_score_fusion(
     candidate_list,
     query_text=None,
     weights=None,
 ):
     """
-    Weighted semantic fusion voi Intent-based Dynamic Weights va Zero-penalty for missing text.
+    Weighted semantic fusion voi Adaptive Intent Weights va Zero-penalty for missing text.
+    Su dung LLM-based intent detection voi 7 intent chi tiet + fallback regex.
     """
     if weights is None:
         weights = {
@@ -2020,39 +2315,24 @@ def weighted_score_fusion(
         weights = weights.copy()
 
     # ----------------------------------------------------------
-    # INTENT-BASED DYNAMIC WEIGHTS
+    # ADAPTIVE INTENT-BASED DYNAMIC WEIGHTS
     # ----------------------------------------------------------
     if query_text and isinstance(query_text, str):
-        intent = detect_query_intent(query_text)
+        # Thu LLM intent truoc, fallback regex
+        try:
+            intent = detect_query_intent_llm(query_text)
+        except Exception:
+            intent = detect_query_intent(query_text)
+
         print(f"[INFO] Query Intent Detected : {intent}")
 
-        if intent == "OCR_INTENT":
-            weights = {
-                "retrieval": 0.4,
-                "ocr": 0.25,
-                "asr": 0.05,
-                "metadata": 0.25,
-                "object": 0.05,
-            }
-        elif intent == "ASR_INTENT":
-            weights = {
-                "retrieval": 0.4,
-                "ocr": 0.05,
-                "asr": 0.25,
-                "metadata": 0.25,
-                "object": 0.05,
-            }
+        # Lay weight profile tu dict, fallback PURE_VISUAL
+        if intent in INTENT_WEIGHT_PROFILES:
+            weights = INTENT_WEIGHT_PROFILES[intent].copy()
         else:
-            # PURE_VISUAL: Uu tien toi da Visual Retrieval (SigLIP2 / DFN5B)
-            # Triet tieu hoan toan nguy co candidate sai co text trung lap cuop ngoi Top 1
-            weights = {
-                "retrieval": 0.7,
-                "object": 0.05,
-                "metadata": 0.15,
-                "ocr": 0.05,
-                "asr": 0.05,
-            }
-    # --- TÍNH TOÁN ĐIỂM SỐ CHO TỪNG CANDIDATE ---
+            weights = INTENT_WEIGHT_PROFILES["PURE_VISUAL"].copy()
+
+    # --- TINH TOAN DIEM SO CHO TUNG CANDIDATE ---
     for cand in candidate_list:
         # Sử dụng .get() linh hoạt để dự phòng cả tên có _norm lẫn không có _norm
         retrieval = cand.get("retrieval_score_normalized", cand.get("retrieval_score", 0.0))
@@ -2061,6 +2341,9 @@ def weighted_score_fusion(
         ocr = cand.get("ocr_score_norm", cand.get("ocr_score", 0.0))
         asr = cand.get("asr_score_norm", cand.get("asr_score", 0.0))
         narrative_bonus = cand.get("narrative_bonus", 0.0)
+        temporal_bonus = cand.get("temporal_bonus", 0.0)
+        # Lay max de tranh cong don qua manh
+        combined_bonus = max(narrative_bonus, temporal_bonus)
 
         ##################################################
         # ZERO-PENALTY FOR MISSING TEXT (FUSION LEVEL)
@@ -2101,11 +2384,12 @@ def weighted_score_fusion(
             + w_meta * metadata
             + w_obj * object_score
             + 0.05 * agreement
-            + narrative_bonus
+            + combined_bonus
         )
 
         cand["agreement_score"] = float(agreement)
         cand["final_score"] = float(final_score)
+        cand["query_intent"] = intent if 'intent' in locals() else "PURE_VISUAL"
 
     return sorted(
         candidate_list,
@@ -2186,8 +2470,12 @@ def reranking_pipeline(
     )
     print_ram("After ASR")
 
-    # 5. Điểm thưởng nhất quán chuỗi cấp Video (Video-level Narrative Bonus)
+    # 5. Diem thuong nhat quan chuoi cap Video (Video-level Narrative Bonus)
     candidate_list = compute_video_narrative_bonus(candidate_list, query_text)
+
+    # 6. Temporal Consistency Bonus (cluster keyframe lien tiep)
+    candidate_list = compute_temporal_consistency_bonus(candidate_list, max_gap=5, min_cluster=2)
+    print_ram("After Temporal Consistency")
 
     # ==========================================================
     # CHUẨN HÓA FEATURE TRƯỚC KHI FUSION
@@ -2228,9 +2516,19 @@ def reranking_pipeline(
     )   
     print_ram("After Fusion")
     
-    # Rerank với Cross-Encoder (nếu kích hoạt)
-    # candidate_list = rerank_with_bge_m3(query_text, candidate_list, top_n=30, alpha=0.75)
-    # print_ram("After Cross-Encoder")
+    # Rerank với Cross-Encoder (kích hoạt có chọn lọc theo Intent & Text Gating)
+    if cfg.get("use_cross_encoder", False):
+        ce_top_n = cfg.get("cross_encoder_top_n", 10)
+        ce_alpha = cfg.get("cross_encoder_alpha", 0.70)
+        query_intent = candidate_list[0].get("query_intent", "PURE_VISUAL") if candidate_list else "PURE_VISUAL"
+        candidate_list = rerank_with_bge_m3(
+            query_text=query_text,
+            candidate_list=candidate_list,
+            top_n=ce_top_n,
+            alpha=ce_alpha,
+            intent=query_intent
+        )
+        print_ram("After Cross-Encoder")
 
     # Đóng gói chuẩn xác lại danh sách kết quả trả về cho hệ thống (UI/FastAPI)
     results = []
@@ -2262,6 +2560,7 @@ def reranking_pipeline(
             "asr_semantic_score": cand.get("asr_semantic_score", 0.0),
             "asr_bm25_score": cand.get("asr_bm25_score", cand.get("asr_fuzzy_score", 0.0)),
             "final_score": cand["final_score"],
+            "ce_score": cand.get("ce_score", 0.0),
             "object_entities": cand.get("object_entities", []),
             "ocr_texts": cand.get("ocr_texts", []),
             "asr_text": cand.get("asr_text", ""),

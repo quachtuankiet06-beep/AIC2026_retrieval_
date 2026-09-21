@@ -10,9 +10,9 @@ sys.path.insert(0, str(ROOT))
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     host = os.environ.get("HOST", "0.0.0.0")
-    env = os.environ.get("ENV", "production")
-    # Chỉ bật hot-reload khi chạy development, tắt trong Docker production
-    reload = env == "development"
+    env = os.environ.get("ENV", "development")
+    # Tự động hot-reload khi phát triển local
+    reload = env != "production"
 
     print("\n" + "=" * 60)
     print("🚀 ĐANG KHỞI CHẠY HỆ THỐNG FASTAPI VIDEO SEARCH - AIC 2026")

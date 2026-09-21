@@ -78,10 +78,26 @@ class CalculateFrameRequest(BaseModel):
 async def favicon():
     return Response(status_code=204)
 
+import time
+
+@app.middleware("http")
+async def add_no_cache_header(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static") or request.url.path == "/":
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     """Render trang chủ giao diện tìm kiếm video"""
-    return templates.TemplateResponse(request=request, name="index.html")
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"version": int(time.time())}
+    )
 
 
 @app.post("/api/search")

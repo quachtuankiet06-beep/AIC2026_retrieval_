@@ -438,6 +438,8 @@ body {
     margin-bottom: 24px;
     padding-bottom: 12px;
     border-bottom: 1px solid var(--border-color);
+    flex-wrap: wrap;
+    gap: 12px;
 }
 
 .results-count {
@@ -450,6 +452,44 @@ body {
     color: var(--success);
 }
 
+.dismiss-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.badge-dismissed {
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    padding: 3px 10px;
+    border-radius: 20px;
+}
+
+.btn-dismiss-video {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    font-size: 0.8rem;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn-dismiss-video:hover {
+    background: #ef4444;
+    color: white;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+    transform: translateY(-1px);
+}
+
 .result-card {
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
@@ -457,11 +497,68 @@ body {
     padding: 24px;
     margin-bottom: 28px;
     box-shadow: var(--shadow);
-    transition: transform 0.2s, border-color 0.2s;
+    transition: transform 0.2s, border-color 0.2s, opacity 0.3s, filter 0.3s;
+    position: relative;
 }
 
 .result-card:hover {
     border-color: #475569;
+}
+
+/* TRẠNG THÁI CARD BỊ VÔ HIỆU HÓA */
+.result-card.card-dismissed {
+    opacity: 0.28;
+    filter: grayscale(100%);
+    border-color: rgba(239, 68, 68, 0.3);
+    background-color: #121824;
+}
+
+.result-card.card-dismissed:hover {
+    opacity: 0.85;
+    filter: grayscale(15%);
+    border-color: #ef4444;
+}
+
+.result-card.card-dismissed.dismissed-hidden {
+    display: none !important;
+}
+
+.dismissed-overlay-bar {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(185, 28, 28, 0.3));
+    border: 1px solid #ef4444;
+    border-radius: var(--radius-sm);
+    padding: 8px 14px;
+    margin-bottom: 14px;
+    color: #fca5a5;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.result-card.card-dismissed .dismissed-overlay-bar {
+    display: flex;
+}
+
+.btn-undo-dismiss {
+    background: #ef4444;
+    color: white;
+    border: none;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.btn-undo-dismiss:hover {
+    background: #dc2626;
+    transform: scale(1.03);
 }
 
 .card-top {
