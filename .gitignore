@@ -21,6 +21,17 @@ __pycache__/
 .env
 .env.*
 !.env.example
+.api
+.api_dich
+*.key
+
+# Additional environments & weights
+yolov8_env/
+*.pt
+*.pth
+*.bin
+*.zip
+scratch/
 
 # ==========================================================
 # IDE
