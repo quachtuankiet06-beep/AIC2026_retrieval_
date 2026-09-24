@@ -7,7 +7,7 @@ from paddleocr import PaddleOCR
 
 print("[INFO] Loading PaddleOCR model...")
 # Thêm enable_mkldnn=False để tránh lỗi phần cứng CPU oneDNN
-ocr = PaddleOCR(use_gpu=True, lang='vi', show_log=False)
+ocr = PaddleOCR(device="gpu", lang="vi")
 
 BASE_DIR = Path(__file__).resolve().parent
 MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_mapping_new.json"

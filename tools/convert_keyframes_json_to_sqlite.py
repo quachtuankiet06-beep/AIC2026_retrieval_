@@ -14,7 +14,7 @@ JSON_PATH = (
     ROOT /
     "data" /
     "indexes" /
-    "keyframes_mapping_updated.json"
+    "keyframes_mapping_new.json"
 )
 
 SQLITE_PATH = (
