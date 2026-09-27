@@ -10,7 +10,7 @@ model_weights:
 # Video Consensus Configuration
 # use_video_consensus: true
 # consensus_top_videos: 1200
-# mapping_path: "D:/tai_lieu_hoc_tap/AIC_2026/data/indexes/keyframes_new_kf.db"
+# mapping_path: "D:/tai_lieu_hoc_tap/AIC_2026/data/indexes/keyframes_b1_b2.db"
 # query_part_weights:
 #   main: 0.7
 #   full: 0.2

@@ -6,7 +6,56 @@ document.addEventListener("DOMContentLoaded", () => {
     initSidebarControls();
     initSearchEvents();
     initConverter();
+    initTopicFilter();
 });
+
+// TOPIC FILTER LOGIC
+const TOPIC_HINTS = {
+    all: '<i class="fa-solid fa-circle-info"></i> Toàn bộ 540,856 vector (không lọc).',
+    thoi_su: '<i class="fa-solid fa-check"></i> Chỉ quét 182,355 vector thuộc L21, L22 và M (Thời sự 60 Giây).',
+    dua_xe_dap: '<i class="fa-solid fa-check"></i> Chỉ quét 28,003 vector thuộc L23 và S (Đua xe đạp theo chặng).',
+    lan_su_rong: '<i class="fa-solid fa-check"></i> Chỉ quét 13,762 vector thuộc L24 (Lân sư rồng).',
+    on_thi_thpt: '<i class="fa-solid fa-check"></i> Chỉ quét 39,547 vector thuộc L25 (Bài giảng ôn thi THPT).',
+    nau_an_vivu: '<i class="fa-solid fa-check"></i> Chỉ quét 167,107 vector thuộc L26 (Nấu ăn ViVU TV).',
+    du_lich_mientay: '<i class="fa-solid fa-check"></i> Chỉ quét 49,007 vector thuộc L27, L28, L29 (Du lịch miền Tây).',
+    lan_toa_tich_cuc: '<i class="fa-solid fa-check"></i> Chỉ quét 16,996 vector thuộc L30 (Lan tỏa năng lượng tích cực).',
+    camera_giao_thong: '<i class="fa-solid fa-check"></i> Chỉ quét 40,195 vector thuộc N (Camera giao thông).'
+};
+
+window.selectTopic = function(topicKey) {
+    const selectEl = document.getElementById("topicFilter");
+    if (selectEl) {
+        selectEl.value = topicKey;
+    }
+    updateTopicUI(topicKey);
+};
+
+window.onTopicSelectChange = function(topicKey) {
+    updateTopicUI(topicKey);
+};
+
+function updateTopicUI(topicKey) {
+    const chips = document.querySelectorAll(".topic-chip");
+    chips.forEach(chip => {
+        if (chip.getAttribute("data-topic") === topicKey) {
+            chip.classList.add("active");
+        } else {
+            chip.classList.remove("active");
+        }
+    });
+
+    const hintEl = document.getElementById("topicFilterHint");
+    if (hintEl) {
+        hintEl.innerHTML = TOPIC_HINTS[topicKey] || TOPIC_HINTS["all"];
+    }
+}
+
+function initTopicFilter() {
+    const selectEl = document.getElementById("topicFilter");
+    if (selectEl) {
+        updateTopicUI(selectEl.value);
+    }
+}
 
 // Format seconds -> HH:MM:SS or MM:SS
 function formatHms(seconds) {
@@ -218,6 +267,7 @@ async function performSearch() {
     const maxKfGap = parseInt(document.getElementById("maxKfGap").value, 10);
     const minKfGap = parseInt(document.getElementById("minKfGap").value, 10);
     const beamWidth = parseInt(document.getElementById("beamWidth").value, 10);
+    const topicFilter = document.getElementById("topicFilter") ? document.getElementById("topicFilter").value : "all";
 
     const payload = {
         query: query,
@@ -229,7 +279,8 @@ async function performSearch() {
         top_k: topK,
         max_kf_gap: maxKfGap,
         min_kf_gap: minKfGap,
-        beam_width: beamWidth
+        beam_width: beamWidth,
+        topic_filter: topicFilter
     };
 
     const loading = document.getElementById("loadingIndicator");

@@ -11,10 +11,13 @@ if str(ROOT_DIR) not in sys.path:
 from src.mapping.mapping_pipeline import mapping_pipeline
 from src.reranking.reranking_pipeline import reranking_pipeline
 from src.retrieval.retrieval_multi_model import retrieval_multi_model_pipeline
-from src.retrieval.retrieval_pipeline import siglip2_retrieval_pipeline
+from src.retrieval.retrieval_pipeline import (
+    siglip2_retrieval_pipeline,
+    clear_translation_cache
+)
 from src.retrieval.temporal_nms import temporal_nms
 
-MAPPING_PATH = str(ROOT_DIR / "data" / "indexes" / "keyframes_new_kf.db")
+MAPPING_PATH = str(ROOT_DIR / "data" / "indexes" / "keyframes_b1_b2.db")
 RETRIEVAL_CONFIG = str(ROOT_DIR / "configs" / "retrieval.yaml")
 RERANK_CONFIG = str(ROOT_DIR / "configs" / "reranking.yaml")
 
@@ -120,8 +123,8 @@ def run_benchmark(gt_file_path, retrieval_mode="multi"):
         ground_truth = json.load(f)
 
     selected_models = [
-        {"name": "siglip2",       "index_path": str(ROOT_DIR / "data" / "indexes" / "siglip2_keyframes_new.index")},
-        {"name": "dfn5b_vit_h14", "index_path": str(ROOT_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_new.index")}
+        {"name": "siglip2",       "index_path": str(ROOT_DIR / "data" / "indexes" / "siglip2_keyframes_b1_b2.index")},
+        {"name": "dfn5b_vit_h14", "index_path": str(ROOT_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_b1_b2.index")}
     ]
 
     stage1_results = {}
@@ -137,6 +140,9 @@ def run_benchmark(gt_file_path, retrieval_mode="multi"):
         q_text = item["query"]
         target_vid = item["video_id"]
 
+        # Ép gọi mới lại Gemini Translate cho từng query
+        clear_translation_cache()
+
         print(f"\n[QUERY {q_id}] '{q_text[:60]}...' | Ground Truth: {target_vid}")
         start_t = time.time()
 
@@ -148,7 +154,7 @@ def run_benchmark(gt_file_path, retrieval_mode="multi"):
                 config_path=RETRIEVAL_CONFIG
             )
         else:
-            siglip2_idx = str(ROOT_DIR / "data" / "indexes" / "siglip2_keyframes_new.index")
+            siglip2_idx = str(ROOT_DIR / "data" / "indexes" / "siglip2_keyframes_b1_b2.index")
             raw_retrieval = siglip2_retrieval_pipeline(q_text, siglip2_idx, RETRIEVAL_CONFIG)
 
         mapped_candidates = mapping_pipeline(
@@ -232,5 +238,5 @@ def run_benchmark(gt_file_path, retrieval_mode="multi"):
 
 
 if __name__ == "__main__":
-    GT_JSON_FILE = Path(__file__).parent / "ground_truth.json"
+    GT_JSON_FILE = Path(__file__).parent / "ground_truth_test_v3.json"
     run_benchmark(GT_JSON_FILE, retrieval_mode="multi")

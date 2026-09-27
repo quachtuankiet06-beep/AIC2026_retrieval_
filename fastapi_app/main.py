@@ -60,6 +60,7 @@ class SearchRequest(BaseModel):
     max_kf_gap: int = Field(150, ge=1, le=500, description="Khoảng cách keyframe tối đa")
     min_kf_gap: int = Field(0, ge=0, le=50, description="Khoảng cách keyframe tối thiểu")
     beam_width: int = Field(5, ge=1, le=100, description="Beam Width cho Temporal Search")
+    topic_filter: str = Field("all", description="Bộ lọc nhóm chủ đề video, vd: 'thoi_su', 'lan_su_rong', ...")
 
 
 class ConvertTimeRequest(BaseModel):
@@ -100,6 +101,13 @@ async def read_root(request: Request):
     )
 
 
+@app.get("/api/topics")
+async def api_get_topics():
+    """Trả về danh sách 8 nhóm chủ đề video hỗ trợ lọc truy vấn."""
+    from src.retrieval.topic_filter import get_topic_list
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"topics": get_topic_list()})
+
+
 @app.post("/api/search")
 async def api_search(req: SearchRequest):
     """
@@ -117,7 +125,8 @@ async def api_search(req: SearchRequest):
             top_k=req.top_k,
             max_kf_gap=req.max_kf_gap,
             min_kf_gap=req.min_kf_gap,
-            beam_width=req.beam_width
+            beam_width=req.beam_width,
+            topic_filter=req.topic_filter,
         )
         return JSONResponse(status_code=status.HTTP_200_OK, content=data)
     except ValueError as ve:
@@ -140,7 +149,13 @@ async def api_get_keyframe(video_id: str, img_name: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Không tìm thấy file ảnh keyframe: {video_id}/{img_name}"
         )
-    return FileResponse(img_path, media_type="image/jpeg")
+    return FileResponse(
+        img_path,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=604800, immutable",
+        },
+    )
 
 
 @app.get("/api/video/{video_id}")

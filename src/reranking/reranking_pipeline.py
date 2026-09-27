@@ -130,11 +130,14 @@ _OBJECT_INDEX = None
 _OBJECT_MAPPING = None
 
 OBJECT_INDEX_PATH = (
-    ROOT / "data" / "indexes" / "object_IVFPQ_new.index"
+    ROOT / "data" / "indexes" / "object_IVFPQ_b1_b2.index"
 )
 
+# Ưu tiên file lookup _kf.json (~24MB), fallback sang file mapping gốc
 OBJECT_MAPPING_PATH = (
-    ROOT / "data" / "indexes" / "object_mapping_new_kf.json"
+    ROOT / "data" / "indexes" / "object_mapping_b1_b2_kf.json"
+    if (ROOT / "data" / "indexes" / "object_mapping_b1_b2_kf.json").exists()
+    else ROOT / "data" / "indexes" / "object_mapping_b1_b2.json"
 )
 def get_object_index():
 
@@ -228,7 +231,21 @@ def get_object_lookup():
         "r",
         encoding="utf-8"
     ) as f:
-        _OBJECT_LOOKUP = json.load(f)
+        raw_data = json.load(f)
+
+    if isinstance(raw_data, list):
+        from collections import defaultdict
+        lookup = defaultdict(list)
+        for item in raw_data:
+            v_id = item.get("video_id")
+            kf_idx = item.get("keyframe_index")
+            vec_idx = item.get("vector_index")
+            key_id = f"{v_id}_{int(kf_idx):04d}" if kf_idx is not None else v_id
+            if vec_idx is not None:
+                lookup[key_id].append(int(vec_idx))
+        _OBJECT_LOOKUP = dict(lookup)
+    else:
+        _OBJECT_LOOKUP = raw_data
 
     print(
         f"[INFO] Object lookup loaded: "
@@ -573,11 +590,14 @@ _METADATA_INDEX = None
 _METADATA_MAPPING = None
 
 METADATA_INDEX_PATH = (
-    ROOT / "data" / "indexes" / "metadata_IVFPQ_new.index"
+    ROOT / "data" / "indexes" / "metadata_IVFPQ_b1_b2.index"
 )
 
+# Ưu tiên file lookup _kf.json (~20MB), fallback sang file mapping gốc
 METADATA_MAPPING_PATH = (
-    ROOT / "data" / "indexes" / "metadata_mapping_new_kf.json"
+    ROOT / "data" / "indexes" / "metadata_mapping_b1_b2_kf.json"
+    if (ROOT / "data" / "indexes" / "metadata_mapping_b1_b2_kf.json").exists()
+    else ROOT / "data" / "indexes" / "metadata_mapping_b1_b2.json"
 )
 
 # ==========================================================
@@ -679,7 +699,20 @@ def get_metadata_lookup():
         "r",
         encoding="utf-8"
     ) as f:
-        _METADATA_LOOKUP = json.load(f)
+        raw_data = json.load(f)
+
+    if isinstance(raw_data, list):
+        lookup = {}
+        for item in raw_data:
+            v_id = item.get("video_id")
+            kf_idx = item.get("keyframe_index")
+            vec_idx = item.get("vector_index")
+            key_id = f"{v_id}_{int(kf_idx):04d}" if kf_idx is not None else v_id
+            if vec_idx is not None:
+                lookup[key_id] = {"vector_index": int(vec_idx)}
+        _METADATA_LOOKUP = lookup
+    else:
+        _METADATA_LOOKUP = raw_data
 
     print(
         f"[INFO] Metadata lookup loaded: "

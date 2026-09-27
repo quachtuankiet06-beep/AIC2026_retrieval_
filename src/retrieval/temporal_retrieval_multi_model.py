@@ -63,10 +63,11 @@ def temporal_sequence_retrieval(
     config_path,
     max_kf_gap=150,     # Khoảng cách tối đa giữa 2 keyframe liên tiếp
     min_kf_gap=1,       # Khoảng cách tối thiểu
-    mapping_path="data/indexes/keyframes_new_kf.db",
+    mapping_path="data/indexes/keyframes_b1_b2.db",
     beam_width=5,        # Độ rộng chùm tìm kiếm (Beam Width) cho mỗi video
     temporal_nms_window=5,
-    top_per_video=30
+    top_per_video=30,
+    topic_filter=None,
 ):
     if not queries:
         return []
@@ -80,7 +81,8 @@ def temporal_sequence_retrieval(
         res = retrieval_multi_model_pipeline(
             query_text=q_text,
             model_configs=model_configs,
-            config_path=config_path
+            config_path=config_path,
+            topic_filter=topic_filter,
         )
         
         if not res:
@@ -306,8 +308,9 @@ def temporal_retrieval_multi_model_pipeline(
     config_path,
     max_kf_gap=150,     
     min_kf_gap=0,      
-    mapping_path="data/indexes/keyframes_new_kf.db",
-    beam_width=5
+    mapping_path="data/indexes/keyframes_b1_b2.db",
+    beam_width=5,
+    topic_filter=None,
 ):
     """
     Hàm pipeline hoàn chỉnh: Nhận chuỗi thô có chứa dấu '/' -> Phân rã query -> Chạy Multi-Model Ensemble kết hợp Beam Search theo từng video_id.
@@ -334,7 +337,8 @@ def temporal_retrieval_multi_model_pipeline(
         max_kf_gap=max_kf_gap,
         min_kf_gap=min_kf_gap,
         mapping_path=mapping_path,
-        beam_width=beam_width
+        beam_width=beam_width,
+        topic_filter=topic_filter,
     )
 
 

@@ -235,6 +235,7 @@ def retrieval_multi_model_pipeline(
     config_path: str,
     rrf_k: int = 60,
     query_plan: dict = None,
+    topic_filter: str = None,
 ):
     """
     Pipeline Retrieval đa mô hình tối ưu cho MRR sử dụng RRF.
@@ -259,9 +260,9 @@ def retrieval_multi_model_pipeline(
         print(f"[INFO] Running retrieval for model: {m_lower}")
         
         if m_lower == "siglip2":
-            res = siglip2_retrieval_pipeline(query_text, idx_path, config_path, query_plan=query_plan)
+            res = siglip2_retrieval_pipeline(query_text, idx_path, config_path, query_plan=query_plan, topic_filter=topic_filter)
         elif m_lower in ["dfn5b", "vit_h14", "dfn5b_vit_h14", "clip_h14"]:
-            res = dfn5b_vit_h14_retrieval_pipeline(query_text, idx_path, config_path, query_plan=query_plan)
+            res = dfn5b_vit_h14_retrieval_pipeline(query_text, idx_path, config_path, query_plan=query_plan, topic_filter=topic_filter)
         else:
             print(f"[WARNING] Model '{m_name}' không được hỗ trợ. Bỏ qua.")
             continue

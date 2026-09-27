@@ -416,6 +416,12 @@ def decompose_standard_narrative_query(query_text):
 
 _TRANSLATION_CACHE = {}
 
+def clear_translation_cache() -> None:
+    """Xóa sạch cache bản dịch trong RAM để ép buộc gọi mới lại Gemini ở mỗi lượt tìm kiếm."""
+    global _TRANSLATION_CACHE
+    _TRANSLATION_CACHE.clear()
+    print("[INFO] Đã làm mới Translation Cache (ép gọi lại Gemini Translation).")
+
 def load_gemini_translation_api_key(api_file=None):
     """
     Đọc Gemini API key dành cho dịch thuật từ file .api_dich.
@@ -442,11 +448,12 @@ def load_gemini_translation_api_key(api_file=None):
                     return line
     return os.environ.get("GEMINI_API_KEY_DICH") or os.environ.get("GEMINI_API_KEY", "")
 
-def translate_with_gemini_visual(query_text: str, api_key: str = None) -> str:
+def translate_with_gemini_visual(query_text: str, api_key: str = None, max_retries: int = 1) -> str:
     """
     Dịch câu truy vấn tiếng Việt sang tiếng Anh với Chuẩn hóa từ vựng thị giác (Visual Vocabulary Standardization).
     - Giữ trọn nghĩa gốc, không tự ý suy diễn hoặc bịa thêm các thực thể/nguyên liệu không có trong câu gốc.
     - Chuẩn hóa chính xác các thực thể thị giác, dụng cụ bếp, vật thể, hành động sang tiếng Anh tự nhiên cho CLIP/SigLIP.
+    - Chỉ retry tối đa 1 lần khi gặp sự cố mạng hoặc rate limit (429) trước khi fallback sang EnViT5.
     """
     if not query_text or not query_text.strip():
         return query_text
@@ -477,11 +484,9 @@ def translate_with_gemini_visual(query_text: str, api_key: str = None) -> str:
 
     prompt = f"{system_instruction}\n\nQuery to translate: \"{query_text.strip()}\"\n\nEnglish Translation:"
 
-    models_to_try = [
+    candidate_models = [
         "gemini-flash-lite-latest",
-        "gemini-3.1-flash-lite",
-        "gemini-2.5-flash-lite",
-        "gemini-flash-latest"
+        "gemini-2.5-flash-lite"
     ]
 
     import urllib.request
@@ -492,7 +497,12 @@ def translate_with_gemini_visual(query_text: str, api_key: str = None) -> str:
         "generationConfig": {"temperature": 0.0}
     }).encode("utf-8")
 
-    for model_name in models_to_try:
+    last_error = ""
+    # Chỉ retry tối đa 1 lần: Tổng cộng tối đa 2 lần thử (1 lần chính + 1 lần retry)
+    total_attempts = 1 + max(0, max_retries)
+
+    for attempt in range(total_attempts):
+        model_name = candidate_models[min(attempt, len(candidate_models) - 1)]
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         req = urllib.request.Request(
             url,
@@ -500,23 +510,27 @@ def translate_with_gemini_visual(query_text: str, api_key: str = None) -> str:
             headers={"Content-Type": "application/json"},
             method="POST"
         )
-        for attempt in range(2):
-            try:
-                with urllib.request.urlopen(req, timeout=12) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    if reply.startswith('"') and reply.endswith('"') and len(reply) > 2:
-                        reply = reply[1:-1].strip()
-                    return reply
-            except urllib.error.HTTPError as he:
-                if he.code == 429 and attempt == 0:
-                    time.sleep(1.5)
-                    continue
-                break
-            except Exception:
-                break
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if reply.startswith('"') and reply.endswith('"') and len(reply) > 2:
+                    reply = reply[1:-1].strip()
+                return reply
+        except urllib.error.HTTPError as he:
+            last_error = f"{model_name}: HTTP {he.code} ({he.reason})"
+            if attempt < total_attempts - 1:
+                print(f"[WARNING] Gemini Visual Translation lần {attempt+1} gặp lỗi ({last_error}). Đang retry 1 lần duy nhất...")
+                time.sleep(1.0)
+                continue
+        except Exception as e:
+            last_error = f"{model_name}: {repr(e)}"
+            if attempt < total_attempts - 1:
+                print(f"[WARNING] Gemini Visual Translation lần {attempt+1} gặp lỗi ({last_error}). Đang retry 1 lần duy nhất...")
+                time.sleep(0.5)
+                continue
 
-    raise RuntimeError("Tất cả candidate models của Gemini API dịch thuật đều không phản hồi.")
+    raise RuntimeError(f"Gemini Visual Translation không phản hồi sau 1 lần retry ({last_error}).")
 
 
 def translate_with_qwen(query_text: str, device: str = "cuda") -> str:
@@ -585,7 +599,7 @@ def translate_with_qwen(query_text: str, device: str = "cuda") -> str:
     return translated
 
 
-def expand_and_translate_query(query_text: str, device: str = "cpu") -> str:
+def expand_and_translate_query(query_text: str, device: str = "cpu", force_reload: bool = False) -> str:
     """
     Dịch và chuẩn hóa câu truy vấn:
     1. Ưu tiên: Gemini 3.1/2.5 Flash Lite với Chuẩn hóa từ vựng thị giác (key .api_dich)
@@ -597,7 +611,7 @@ def expand_and_translate_query(query_text: str, device: str = "cpu") -> str:
         return query_text
 
     clean_q = query_text.strip()
-    if clean_q in _TRANSLATION_CACHE:
+    if not force_reload and clean_q in _TRANSLATION_CACHE:
         return _TRANSLATION_CACHE[clean_q]
 
     # ======================================================
@@ -654,7 +668,7 @@ def get_siglip2_model(device="cuda"):
     return _SIGLIP2_CACHE["processor"], _SIGLIP2_CACHE["model"]
 
 
-def siglip2_retrieval_pipeline(query_text, index_path, config_path, query_plan=None):
+def siglip2_retrieval_pipeline(query_text, index_path, config_path, query_plan=None, topic_filter=None):
     # 1. Nếu query_plan chưa được truyền từ trên xuống, ta tiến hành phân rã
     if query_plan is None:
         query_plan = decompose_standard_narrative_query(query_text)
@@ -725,7 +739,15 @@ def siglip2_retrieval_pipeline(query_text, index_path, config_path, query_plan=N
 
     print("[INFO] Loading SigLIP 2 FAISS index...")
     index = get_faiss_index(index_path)
-    scores, indices = index.search(query_embedding, top_k)
+
+    # Áp dụng bộ lọc chủ đề theo dải vector index (tránh nhiễu)
+    from src.retrieval.topic_filter import get_search_parameters
+    search_params = get_search_parameters(topic_filter)
+    if search_params is not None:
+        print(f"[INFO] SigLIP 2 Search áp dụng bộ lọc chủ đề: '{topic_filter}'")
+        scores, indices = index.search(query_embedding, top_k, params=search_params)
+    else:
+        scores, indices = index.search(query_embedding, top_k)
 
     results = []
     rank = 1
@@ -775,7 +797,7 @@ def get_dfn5b_vit_h14_model(device="cuda"):
     return _DFN5B_CACHE["model"], _DFN5B_CACHE["tokenizer"]
 
 
-def dfn5b_vit_h14_retrieval_pipeline(query_text, index_path, config_path, query_plan=None):
+def dfn5b_vit_h14_retrieval_pipeline(query_text, index_path, config_path, query_plan=None, topic_filter=None):
     # 1. Nếu query_plan chưa được truyền từ trên xuống, ta mới tiến hành phân rã
     if query_plan is None:
         query_plan = decompose_standard_narrative_query(query_text)
@@ -831,7 +853,15 @@ def dfn5b_vit_h14_retrieval_pipeline(query_text, index_path, config_path, query_
 
     print("[INFO] Loading DFN5B-CLIP-ViT-H-14 FAISS index...")
     index = get_faiss_index(index_path)
-    scores, indices = index.search(query_embedding, top_k)
+
+    # Áp dụng bộ lọc chủ đề theo dải vector index (tránh nhiễu)
+    from src.retrieval.topic_filter import get_search_parameters
+    search_params = get_search_parameters(topic_filter)
+    if search_params is not None:
+        print(f"[INFO] DFN5B Search áp dụng bộ lọc chủ đề: '{topic_filter}'")
+        scores, indices = index.search(query_embedding, top_k, params=search_params)
+    else:
+        scores, indices = index.search(query_embedding, top_k)
 
     results = []
     rank = 1

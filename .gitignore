@@ -1,5 +1,5 @@
 # ==========================================================
-# Python environments
+# Python environments & cache
 # ==========================================================
 aic_env/
 aic_paddle_env/
@@ -7,74 +7,86 @@ aic_wsl_312/
 venv/
 .venv/
 env/
-
-# ==========================================================
-# Python cache
-# ==========================================================
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
 
 # ==========================================================
-# Environment / secrets
+# Environment / secrets / API keys (TUYỆT ĐỐI KHÔNG COMMIT)
 # ==========================================================
 .env
 .env.*
 !.env.example
 .api
 .api_dich
-*.key
-
-# Additional environments & weights
-yolov8_env/
-*.pt
-*.pth
-*.bin
-*.zip
-scratch/
+.api_*
 
 # ==========================================================
-# IDE
+# IDE & OS
 # ==========================================================
 .vscode/
 .idea/
-
-# ==========================================================
-# OS
-# ==========================================================
 .DS_Store
 Thumbs.db
-
-# ==========================================================
-# Logs
-# ==========================================================
 *.log
-
-# ==========================================================
-# Jupyter
-# ==========================================================
 .ipynb_checkpoints/
-
-# ==========================================================
-# Build / package
-# ==========================================================
 build/
 dist/
 *.egg-info/
 *.whl
+
 # ==========================================================
-# Large data / generated indexes (quá lớn cho GitHub)
+# Model weights & AI runtime environments
+# ==========================================================
+*.pt
+*.pth
+*.onnx
+*.bin
+yolov8_env/
+yolov8*.pt
+
+# ==========================================================
+# Data files & generated indexes (Không đưa lên GitHub - xem DATA.md)
 # ==========================================================
 data/**
 !data/**/.gitkeep
-
-# Video files
 videos_placeholder/
+*.db
+*.sqlite
+*.index
 
-# Environment file (chứa secrets, không commit)
-.env
 # ==========================================================
-# Tools / Streamlit / AI Agents
+# Folders & Scripts dùng để tạo / sinh file .index hoặc .json
+# (Chi tiết schema được mô tả đầy đủ trong DATA.md)
 # ==========================================================
-.streamlit/
+src/indexing/
+src_new_keyframe/
+src/mapping/build_*.py
+tools/
+run_ocr_batch2_wsl.py
+update_ocr_score.py
+update_asr_batch2.py
+update_metadata_batch2.py
+append_batch_n_mapping.py
+setup_wsl_ocr.sh
+debug_paths.py
+metadata_mapping_new_kf.json
+
+# ==========================================================
+# Dữ liệu thi, đề thi & file nén
+# ==========================================================
+*.zip
+*.tar.gz
+*.rar
+SOTUYEN*-bo-de-thi/
+testAIC25/
+
+# ==========================================================
+# Temporary scripts, reports & agent artifacts
+# ==========================================================
+scratch/
+benchmark/reports/*.json
 .agent/
+.agents/
+.streamlit/

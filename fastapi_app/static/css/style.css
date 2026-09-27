@@ -881,3 +881,98 @@ body {
     transform: translateY(0);
     opacity: 1;
 }
+
+/* ==========================================================
+   TOPIC CATEGORY FILTER (Tránh nhiễu)
+   ========================================================== */
+.topic-filter-box {
+    background: linear-gradient(145deg, rgba(30, 41, 59, 0.7), rgba(15, 23, 42, 0.9));
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: var(--radius-md);
+    padding: 12px;
+}
+
+.topic-filter-select {
+    width: 100%;
+    font-weight: 600;
+    color: #60a5fa;
+    background-color: #0f172a;
+    border: 1px solid #3b82f666;
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+.topic-filter-select:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+}
+
+.topic-hint {
+    margin-top: 6px;
+    font-size: 0.76rem;
+    color: #94a3b8;
+    line-height: 1.3;
+}
+
+/* TOPIC CHIPS BAR (Dưới thanh tìm kiếm) */
+.topic-chips-wrapper {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.topic-chips-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #cbd5e1;
+}
+
+.topic-chips-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.topic-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 13px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: #94a3b8;
+    background: rgba(30, 41, 59, 0.85);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 9999px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    user-select: none;
+    white-space: nowrap;
+}
+
+.topic-chip:hover {
+    color: #f1f5f9;
+    background: rgba(51, 65, 85, 0.95);
+    border-color: rgba(59, 130, 246, 0.5);
+    transform: translateY(-1px);
+}
+
+.topic-chip.active {
+    color: #ffffff;
+    background: linear-gradient(135deg, #1d4ed8, #2563eb);
+    border-color: #60a5fa;
+    box-shadow: 0 2px 10px rgba(37, 99, 235, 0.45);
+    font-weight: 600;
+    transform: scale(1.02);
+}
+
+.topic-chip .chip-icon {
+    font-size: 0.95rem;
+    line-height: 1;
+}

@@ -77,6 +77,27 @@
                     </select>
                 </div>
 
+                <!-- TOPIC CATEGORY FILTER (Tránh nhiễu) -->
+                <div class="form-group topic-filter-box">
+                    <label for="topicFilter" class="form-label">
+                        <i class="fa-solid fa-filter"></i> Bộ lọc Chủ đề Video:
+                    </label>
+                    <select id="topicFilter" class="form-control topic-filter-select" onchange="onTopicSelectChange(this.value)">
+                        <option value="all" selected>🌐 Tất cả chủ đề (Mặc định)</option>
+                        <option value="thoi_su">📰 Thời sự 60 Giây (L21, L22, M)</option>
+                        <option value="dua_xe_dap">🚴 Đua xe đạp theo chặng (L23, S)</option>
+                        <option value="lan_su_rong">🐉 Lân sư rồng (L24)</option>
+                        <option value="on_thi_thpt">📚 Bài giảng ôn thi THPT (L25)</option>
+                        <option value="nau_an_vivu">🍳 Nấu ăn ViVU TV (L26)</option>
+                        <option value="du_lich_mientay">🚣 Du lịch miền Tây (L27–L29)</option>
+                        <option value="lan_toa_tich_cuc">✨ Lan tỏa năng lượng tích cực (L30)</option>
+                        <option value="camera_giao_thong">🚦 Camera giao thông (N)</option>
+                    </select>
+                    <div id="topicFilterHint" class="topic-hint">
+                        <i class="fa-solid fa-circle-info"></i> Toàn bộ 540,856 vector (không lọc).
+                    </div>
+                </div>
+
                 <!-- Top K Slider -->
                 <div class="form-group">
                     <div class="slider-header">
@@ -155,6 +176,42 @@
                     <button id="btnSearch" class="btn btn-primary btn-search">
                         <i class="fa-solid fa-rocket"></i> Thực hiện Tìm kiếm
                     </button>
+                </div>
+
+                <!-- QUICK TOPIC FILTER CHIPS (Tránh nhiễu) -->
+                <div class="topic-chips-wrapper">
+                    <div class="topic-chips-header">
+                        <span><i class="fa-solid fa-crosshairs"></i> Khoanh vùng chuỗi video (Retrieval chỉ quét trong nhóm này):</span>
+                    </div>
+                    <div class="topic-chips-bar" id="topicChipsBar">
+                        <button type="button" class="topic-chip active" data-topic="all" onclick="selectTopic('all')">
+                            <span class="chip-icon">🌐</span> Tất cả
+                        </button>
+                        <button type="button" class="topic-chip" data-topic="thoi_su" onclick="selectTopic('thoi_su')">
+                            <span class="chip-icon">📰</span> Thời sự 60 Giây (L21, L22, M)
+                        </button>
+                        <button type="button" class="topic-chip" data-topic="dua_xe_dap" onclick="selectTopic('dua_xe_dap')">
+                            <span class="chip-icon">🚴</span> Đua xe đạp theo chặng (L23, S)
+                        </button>
+                        <button type="button" class="topic-chip" data-topic="lan_su_rong" onclick="selectTopic('lan_su_rong')">
+                            <span class="chip-icon">🐉</span> Lân sư rồng (L24)
+                        </button>
+                        <button type="button" class="topic-chip" data-topic="on_thi_thpt" onclick="selectTopic('on_thi_thpt')">
+                            <span class="chip-icon">📚</span> Bài giảng ôn thi THPT (L25)
+                        </button>
+                        <button type="button" class="topic-chip" data-topic="nau_an_vivu" onclick="selectTopic('nau_an_vivu')">
+                            <span class="chip-icon">🍳</span> Nấu ăn ViVU TV (L26)
+                        </button>
+                        <button type="button" class="topic-chip" data-topic="du_lich_mientay" onclick="selectTopic('du_lich_mientay')">
+                            <span class="chip-icon">🚣</span> Du lịch miền Tây (L27–L29)
+                        </button>
+                        <button type="button" class="topic-chip" data-topic="lan_toa_tich_cuc" onclick="selectTopic('lan_toa_tich_cuc')">
+                            <span class="chip-icon">✨</span> Lan tỏa năng lượng tích cực (L30)
+                        </button>
+                        <button type="button" class="topic-chip" data-topic="camera_giao_thong" onclick="selectTopic('camera_giao_thong')">
+                            <span class="chip-icon">🚦</span> Camera giao thông (N)
+                        </button>
+                    </div>
                 </div>
             </div>
 

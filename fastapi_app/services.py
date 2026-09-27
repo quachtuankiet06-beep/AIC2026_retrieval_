@@ -417,6 +417,7 @@ from src.reranking.temporal_reranking_pipeline import temporal_sequence_rerankin
 from src.retrieval.retrieval_pipeline import (
     siglip2_retrieval_pipeline,
     dfn5b_vit_h14_retrieval_pipeline,
+    clear_translation_cache,
 )
 from src.retrieval.retrieval_multi_model import retrieval_multi_model_pipeline
 from src.retrieval.temporal_retrieval_multi_model import temporal_retrieval_multi_model_pipeline
@@ -424,7 +425,7 @@ from src.retrieval.temporal_nms import temporal_nms
 
 # Cấu hình đường dẫn mặc định
 BASE_DIR = ROOT_DIR
-MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_new_kf.db"
+MAPPING_PATH = BASE_DIR / "data" / "indexes" / "keyframes_b1_b2.db"
 RETRIEVAL_CONFIG = BASE_DIR / "configs" / "retrieval.yaml"
 RERANK_CONFIG = BASE_DIR / "configs" / "reranking.yaml"
 VIDEO_FPS_MAPPING_PATH = BASE_DIR / "data" / "mapping" / "video_fps_mapping.json"
@@ -496,13 +497,82 @@ def get_video_path(video_id: str) -> Optional[Path]:
     return None
 
 
-@lru_cache(maxsize=8192)
-def get_keyframe_path(video_id: str, img_filename: str) -> Optional[Path]:
-    """Tìm đường dẫn ảnh keyframe trong data/Custom_Keyframes/ hoặc data/keyframes/."""
-    custom_dir = BASE_DIR / "data" / "Custom_Keyframes" / video_id
+_VIDEO_KEYFRAME_DIR_CACHE: Optional[Dict[str, Path]] = None
 
-    # 1. Thử trực tiếp tên file ảnh trong Custom_Keyframes
-    direct_path = custom_dir / img_filename
+
+def get_video_keyframe_dir_registry() -> Dict[str, Path]:
+    """Lập chỉ mục nhanh thư mục chứa keyframe của từng video_id (chạy 1 lần, O(1) tra cứu)."""
+    global _VIDEO_KEYFRAME_DIR_CACHE
+    if _VIDEO_KEYFRAME_DIR_CACHE is not None:
+        return _VIDEO_KEYFRAME_DIR_CACHE
+
+    registry: Dict[str, Path] = {}
+    data_dir = BASE_DIR / "data"
+
+    # 1. Custom_Keyframes (Batch 1 & một phần Batch 2)
+    ck_dir = data_dir / "Custom_Keyframes"
+    if ck_dir.exists():
+        for p in ck_dir.iterdir():
+            if p.is_dir():
+                registry[p.name.lower()] = p
+
+    # 2. keyframes_batch2_n
+    k2_n = data_dir / "keyframes_batch2_n"
+    if k2_n.exists():
+        for p in k2_n.iterdir():
+            if p.is_dir():
+                registry[p.name.lower()] = p
+                registry[p.name.replace("-", "_").lower()] = p
+
+    # 3. keyframes_batch2_m và keyframes_batch2_s
+    for b in ["keyframes_batch2_m", "keyframes_batch2_s"]:
+        bp = data_dir / b
+        if bp.exists():
+            for kf_folder in bp.glob("**/keyframes"):
+                if kf_folder.is_dir():
+                    for p in kf_folder.iterdir():
+                        if p.is_dir():
+                            registry[p.name.lower()] = p
+                            registry[p.name.replace("-", "_").lower()] = p
+
+    _VIDEO_KEYFRAME_DIR_CACHE = registry
+    print(f"[INFO] Đã lập chỉ mục {len(registry)} thư mục keyframe video phục vụ tức thì!")
+    return _VIDEO_KEYFRAME_DIR_CACHE
+
+
+@lru_cache(maxsize=16384)
+def get_keyframe_path(video_id: str, img_filename: str) -> Optional[Path]:
+    """Tìm đường dẫn ảnh keyframe siêu tốc (O(1)) không dùng glob đệ quy chậm chạp."""
+    registry = get_video_keyframe_dir_registry()
+
+    vid_clean = video_id.strip().lower()
+    folder = registry.get(vid_clean)
+    if not folder:
+        folder = registry.get(vid_clean.replace("-", "_")) or registry.get(vid_clean.replace("_", "-"))
+
+    # Fallback nhanh từ SQLite DB nếu video mới chưa có trong registry
+    if not folder:
+        try:
+            import sqlite3
+            db_file = BASE_DIR / "data" / "indexes" / "keyframes_b1_b2.db"
+            if db_file.exists():
+                with sqlite3.connect(str(db_file), timeout=3) as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT keyframe_path FROM keyframes WHERE video_id = ? LIMIT 1", (video_id,))
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        kp_path = BASE_DIR / "data" / row[0]
+                        if kp_path.parent.is_dir():
+                            folder = kp_path.parent
+                            registry[vid_clean] = folder
+        except Exception:
+            pass
+
+    if not folder or not folder.is_dir():
+        return None
+
+    # 1. Thử trực tiếp tên file ảnh trong folder
+    direct_path = folder / img_filename
     if direct_path.exists():
         return direct_path
 
@@ -510,36 +580,19 @@ def get_keyframe_path(video_id: str, img_filename: str) -> Optional[Path]:
     pure_name = Path(img_filename).stem
     if pure_name.isdigit():
         idx_val = int(pure_name)
-
-        six_digit_path = custom_dir / f"{idx_val:06d}.jpg"
+        six_digit_path = folder / f"{idx_val:06d}.jpg"
         if six_digit_path.exists():
             return six_digit_path
 
-        raw_idx_path = custom_dir / f"{idx_val}.jpg"
+        raw_idx_path = folder / f"{idx_val}.jpg"
         if raw_idx_path.exists():
             return raw_idx_path
 
-    # 3. Fallback thư mục keyframes cũ nếu có
-    batch_prefix = video_id.split("_")[0] if "_" in video_id else "Keyframes_L21"
-    folder_batch = f"Keyframes_{batch_prefix}"
-    old_keyframe_path = (
-        BASE_DIR
-        / "data"
-        / "keyframes"
-        / folder_batch
-        / "keyframes"
-        / video_id
-        / img_filename
-    )
-    if old_keyframe_path.exists():
-        return old_keyframe_path
-
-    # 4. Fallback glob tìm kiếm (đắt, nhưng được cache)
-    found_files = list(BASE_DIR.glob(f"**/Custom_Keyframes/{video_id}/{img_filename}"))
-    if not found_files:
-        found_files = list(BASE_DIR.glob(f"**/keyframes/{video_id}/{img_filename}"))
-    if found_files:
-        return Path(found_files[0])
+    # 3. Thử các đuôi mở rộng phổ biến
+    for ext in [".jpg", ".png", ".webp", ".jpeg"]:
+        p = folder / f"{pure_name}{ext}"
+        if p.exists():
+            return p
 
     return None
 
@@ -596,6 +649,7 @@ def execute_search(
     max_kf_gap: int = 150,
     min_kf_gap: int = 0,
     beam_width: int = 5,
+    topic_filter: str = "all",
 ) -> Dict[str, Any]:
     """
     Thực thi toàn bộ luồng tìm kiếm (Standard hoặc Temporal Sequence),
@@ -605,10 +659,14 @@ def execute_search(
     - Cache đường dẫn video / keyframe
     - Giảm gọi I/O lặp lại
     - Đồng bộ temporal NMS với benchmark ở mức min_gap_sec=0.3
+    - Bộ lọc chủ đề video (topic_filter) lọc trực tiếp ở tầng FAISS qua IDSelector
     """
     query = query.strip()
     if not query:
         raise ValueError("Vui lòng nhập nội dung truy vấn!")
+
+    # Ép buộc làm mới Translation Cache ở đầu mỗi lượt tìm kiếm để luôn gọi lại Gemini
+    clear_translation_cache()
 
     mapping_p = str(MAPPING_PATH)
     ret_cfg = str(RETRIEVAL_CONFIG)
@@ -620,9 +678,9 @@ def execute_search(
     if search_type == "temporal":
         if retrieval_mode == "single":
             if single_model_choice == "siglip2":
-                idx_path = str(BASE_DIR / "data" / "indexes" / "siglip2_keyframes_new.index")
+                idx_path = str(BASE_DIR / "data" / "indexes" / "siglip2_keyframes_b1_b2.index")
             else:
-                idx_path = str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_new.index")
+                idx_path = str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_b1_b2.index")
             current_temporal_models = [{"name": single_model_choice, "index_path": idx_path}]
         else:
             current_temporal_models = []
@@ -630,14 +688,14 @@ def execute_search(
                 current_temporal_models.append(
                     {
                         "name": "siglip2",
-                        "index_path": str(BASE_DIR / "data" / "indexes" / "siglip2_keyframes_new.index"),
+                        "index_path": str(BASE_DIR / "data" / "indexes" / "siglip2_keyframes_b1_b2.index"),
                     }
                 )
             if use_dfn5b:
                 current_temporal_models.append(
                     {
                         "name": "dfn5b_vit_h14",
-                        "index_path": str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_new.index"),
+                        "index_path": str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_b1_b2.index"),
                     }
                 )
             if not current_temporal_models:
@@ -650,6 +708,7 @@ def execute_search(
             max_kf_gap=max_kf_gap,
             min_kf_gap=min_kf_gap,
             beam_width=beam_width,
+            topic_filter=topic_filter,
         )
 
         if not retrieval_results:
@@ -687,25 +746,25 @@ def execute_search(
     else:
         if retrieval_mode == "single":
             if single_model_choice == "siglip2":
-                idx_path = BASE_DIR / "data" / "indexes" / "siglip2_keyframes_new.index"
-                retrieval_results = siglip2_retrieval_pipeline(query, str(idx_path), ret_cfg)
+                idx_path = BASE_DIR / "data" / "indexes" / "siglip2_keyframes_b1_b2.index"
+                retrieval_results = siglip2_retrieval_pipeline(query, str(idx_path), ret_cfg, topic_filter=topic_filter)
             else:
-                idx_path = BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_new.index"
-                retrieval_results = dfn5b_vit_h14_retrieval_pipeline(query, str(idx_path), ret_cfg)
+                idx_path = BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_b1_b2.index"
+                retrieval_results = dfn5b_vit_h14_retrieval_pipeline(query, str(idx_path), ret_cfg, topic_filter=topic_filter)
         else:
             selected_models = []
             if use_siglip2:
                 selected_models.append(
                     {
                         "name": "siglip2",
-                        "index_path": str(BASE_DIR / "data" / "indexes" / "siglip2_keyframes_new.index"),
+                        "index_path": str(BASE_DIR / "data" / "indexes" / "siglip2_keyframes_b1_b2.index"),
                     }
                 )
             if use_dfn5b:
                 selected_models.append(
                     {
                         "name": "dfn5b_vit_h14",
-                        "index_path": str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_new.index"),
+                        "index_path": str(BASE_DIR / "data" / "indexes" / "dfn5b_clip_vit_h14_keyframes_b1_b2.index"),
                     }
                 )
             if not selected_models:
@@ -715,6 +774,7 @@ def execute_search(
                 query_text=query,
                 model_configs=selected_models,
                 config_path=ret_cfg,
+                topic_filter=topic_filter,
             )
 
         if not retrieval_results:

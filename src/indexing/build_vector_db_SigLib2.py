@@ -1,1 +1,0 @@
-# chạy trên kaggle rồi
