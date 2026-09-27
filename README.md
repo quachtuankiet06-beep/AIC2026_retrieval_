@@ -122,7 +122,7 @@ AIC_2026/
 │
 ├── DATA.md                           # 📖 Tài liệu mô tả Schema toàn bộ file Data (.index, .db, .json)
 ├── run_fastapi.py                    # Entry point khởi chạy web server
-└── requirements_docker.txt           # Danh mục thư viện Python yêu cầu
+└── requirements.txt                  # Danh mục thư viện Python yêu cầu
 ```
 
 > 📌 **Lưu ý về Dữ liệu:** Toàn bộ file index vector, database SQLite và mapping JSON có dung lượng lớn nên không được lưu trữ trong Git. Vui lòng đọc tài liệu [DATA.md](file:///d:/tai_lieu_hoc_tap/AIC_2026/DATA.md) để nắm rõ cấu trúc schema và cách thức tạo/nạp dữ liệu vào hệ thống.
@@ -153,7 +153,7 @@ source venv/bin/activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
 # Cài đặt các gói phụ thuộc còn lại:
-pip install -r requirements_docker.txt
+pip install -r requirements.txt
 ```
 
 ### 3. Cấu hình API Key (Tùy chọn cho tính năng Gemini Visual Translation)
